@@ -71,7 +71,7 @@ if (!function_exists('getProducts')) {
     }
 }
 
-/* ---------- POPULAR PRODUCTS (top 8 by latest) ---------- */
+/* ---------- POPULAR PRODUCTS ---------- */
 if (!function_exists('getPopularProducts')) {
     function getPopularProducts($pdo, $limit = 4)
     {
@@ -79,32 +79,58 @@ if (!function_exists('getPopularProducts')) {
     }
 }
 
-/* ---------- ACTIVE MENU PRODUCTS ---------- */
-if (!function_exists('getMenuProducts')) {
-    function getMenuProducts($pdo, $limit = 4)
+/* ---------- ACTIVE MENU ---------- */
+if (!function_exists('getActiveMenu')) {
+    /**
+     * Returns the currently active menu row (or null).
+     */
+    function getActiveMenu($pdo)
     {
         try {
-            $menuStmt = $pdo->prepare(
-                "SELECT menu_code FROM menus
+            $stmt = $pdo->prepare(
+                "SELECT id, menu_code, menu_name, start_at, end_at
+                 FROM menus
                  WHERE status = 1
-                   AND NOW() BETWEEN start_at AND end_at
-                 ORDER BY id DESC LIMIT 1"
+                   AND start_at <= NOW()
+                   AND end_at   >= NOW()
+                 ORDER BY start_at DESC
+                 LIMIT 1"
             );
-            $menuStmt->execute();
-            $menu = $menuStmt->fetch();
+            $stmt->execute();
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            return $row ?: null;
+        } catch (PDOException $e) {
+            return null;
+        }
+    }
+}
 
+/* ---------- MENU PRODUCTS (active menu only) ---------- */
+if (!function_exists('getMenuProducts')) {
+    function getMenuProducts($pdo, $limit = 100)
+    {
+        try {
+            $menu = getActiveMenu($pdo);
             if (!$menu) return [];
 
             $stmt = $pdo->prepare(
-                "SELECT DISTINCT p.id, p.product_code, p.product_name, p.product_image,
-                        p.category_id, c.category_name,
+                "SELECT DISTINCT
+                        p.id,
+                        p.product_code,
+                        p.product_name,
+                        p.product_image,
+                        p.category_id,
+                        c.category_name,
+                        c.category_slug,
+                        c.category_image,
                         (SELECT MIN(v.price) FROM product_variants v
                          WHERE v.product_code = p.product_code AND v.status = 1) AS min_price
                  FROM menu_products mp
-                 INNER JOIN products p ON p.product_code = mp.product_code
-                 LEFT JOIN categories c ON c.id = p.category_id
-                 WHERE mp.menu_code = ? AND p.status = 1
-                 ORDER BY p.id DESC
+                 INNER JOIN products p       ON p.product_code = mp.product_code
+                 LEFT  JOIN categories c     ON c.id = p.category_id
+                 WHERE mp.menu_code = ?
+                   AND p.status = 1
+                 ORDER BY p.id ASC
                  LIMIT ?"
             );
             $stmt->bindValue(1, $menu['menu_code'], PDO::PARAM_STR);
@@ -117,7 +143,36 @@ if (!function_exists('getMenuProducts')) {
     }
 }
 
-/* ---------- IMAGE URL HELPER ---------- */
+/* ---------- MENU CATEGORIES (categories that exist in active menu) ---------- */
+if (!function_exists('getMenuCategories')) {
+    function getMenuCategories($pdo, $limit = 20)
+    {
+        try {
+            $menu = getActiveMenu($pdo);
+            if (!$menu) return [];
+
+            $stmt = $pdo->prepare(
+                "SELECT DISTINCT c.id, c.category_name, c.category_slug, c.category_image
+                 FROM menu_products mp
+                 INNER JOIN products p   ON p.product_code = mp.product_code
+                 INNER JOIN categories c ON c.id = p.category_id
+                 WHERE mp.menu_code = ?
+                   AND p.status = 1
+                   AND c.status = 1
+                 ORDER BY c.id ASC
+                 LIMIT ?"
+            );
+            $stmt->bindValue(1, $menu['menu_code'], PDO::PARAM_STR);
+            $stmt->bindValue(2, (int)$limit,       PDO::PARAM_INT);
+            $stmt->execute();
+            return $stmt->fetchAll();
+        } catch (PDOException $e) {
+            return [];
+        }
+    }
+}
+
+/* ---------- IMAGE URL HELPERS ---------- */
 if (!function_exists('productImageUrl')) {
     function productImageUrl($img)
     {
@@ -131,5 +186,27 @@ if (!function_exists('categoryImageUrl')) {
     {
         if (empty($img)) return '';
         return ADMIN_URL . $img;
+    }
+}
+
+/* ---------- JSON RESPONSE ---------- */
+if (!function_exists('jsonResponse')) {
+    function jsonResponse(bool $success, string $message = '', $data = null): void
+    {
+        if (!headers_sent()) {
+            header('Content-Type: application/json; charset=utf-8');
+        }
+
+        $payload = [
+            'success' => $success,
+            'message' => $message
+        ];
+
+        if ($data !== null) {
+            $payload['data'] = $data;
+        }
+
+        echo json_encode($payload, JSON_UNESCAPED_UNICODE);
+        exit;
     }
 }

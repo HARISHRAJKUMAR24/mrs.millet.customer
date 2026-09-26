@@ -67,3 +67,10 @@ try {
     die("Database connection failed: " .
         $e->getMessage());
 }
+
+// =========================================
+// START SESSION
+// =========================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
