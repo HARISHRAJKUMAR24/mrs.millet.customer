@@ -9,11 +9,72 @@ $logoUrl  = !empty($settings['logo_image'])    ? ADMIN_URL . $settings['logo_ima
 $favicon  = !empty($settings['favicon_image']) ? ADMIN_URL . $settings['favicon_image'] : '';
 
 /* =========================================================
-   MENU-ONLY MODE
+   MENU (needed for discount anchoring)
    ========================================================= */
 $activeMenu   = getActiveMenu($pdo);
 $isMenuActive = $activeMenu !== null;
 
+/* =========================================================
+   CURRENT DISCOUNT (anchored to menu launch)
+   ========================================================= */
+$currentDiscount   = null;
+$discountBadgeText = '';
+
+if ($isMenuActive) {
+    try {
+        $menuStart = strtotime($activeMenu['start_at']);
+        $menuEnd   = strtotime($activeMenu['end_at']);
+        $now       = time();
+
+        if ($now >= $menuStart && $now <= $menuEnd) {
+
+            $dStmt = $pdo->prepare(
+                "SELECT d.discount_code, d.discount_name,
+                        dt.slot_name, dt.start_time, dt.end_time,
+                        dt.amount_type, dt.discount_amount, dt.delivery_enabled
+                 FROM discounts d
+                 INNER JOIN discount_times dt ON dt.discount_code = d.discount_code
+                 WHERE d.status = 1
+                   AND d.discount_type = 'time'
+                 ORDER BY dt.id ASC"
+            );
+            $dStmt->execute();
+            $slots = $dStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $prevEndEpoch = $menuStart;
+            $baseDay      = date('Y-m-d', $menuStart);
+
+            foreach ($slots as $s) {
+                $slotEndTs = strtotime($baseDay . ' ' . $s['end_time']);
+                if ($slotEndTs < $prevEndEpoch) $slotEndTs += 86400;
+
+                if ($now >= $prevEndEpoch && $now <= $slotEndTs) {
+                    $currentDiscount = [
+                        'name'        => $s['discount_name'],
+                        'slot_name'   => $s['slot_name'],
+                        'amount_type' => $s['amount_type'],
+                        'amount'      => (float)$s['discount_amount'],
+                        'delivery'    => (int)$s['delivery_enabled'],
+                    ];
+                    break;
+                }
+                $prevEndEpoch = $slotEndTs;
+            }
+        }
+    } catch (PDOException $e) {
+        $currentDiscount = null;
+    }
+}
+
+if ($currentDiscount && $currentDiscount['amount'] > 0) {
+    $discountBadgeText = $currentDiscount['amount_type'] === 'percent'
+        ? number_format($currentDiscount['amount'], 0) . '% OFF'
+        : '₹' . number_format($currentDiscount['amount'], 0) . ' OFF';
+}
+
+/* =========================================================
+   MENU PRODUCTS / CATEGORIES
+   ========================================================= */
 $categories = [];
 $products   = [];
 $menuItems  = [];
@@ -29,7 +90,7 @@ $customerLoggedIn = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_
 $customerName     = $_SESSION['customer_name'] ?? '';
 $customerMobile   = $_SESSION['customer_mobile'] ?? '';
 
-/* Cart count + total */
+/* Cart */
 $cartCount = 0;
 $cartTotal = 0;
 if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
@@ -46,10 +107,57 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
 <head>
     <?php include_once './includes/head_links.php'; ?>
 
+    <style>
+        /* =====================================================
+           PRODUCT CARD — 3D DISCOUNT BADGE (bottom-right)
+           ===================================================== */
+        .mm-product-img {
+            position: relative;
+        }
+
+        .mm-discount-badge {
+            position: absolute;
+            bottom: 10px;
+           left: 10px;
+            top: auto;
+            right: auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 12px;
+            font-size: 12px;
+            font-weight: 900;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            color: #fff;
+            line-height: 1;
+            border-radius: 9px;
+            background: linear-gradient(145deg, #d42a3a 0%, #b51f2c 45%, #7a1220 100%);
+            box-shadow:
+                0 1px 0 rgba(255, 255, 255, .25) inset,
+                0 -1px 0 rgba(0, 0, 0, .25) inset,
+                0 3px 0 #5c0d18,
+                0 6px 12px rgba(181, 31, 44, .45);
+            transform: rotate(-3deg);
+            z-index: 3;
+            text-shadow: 0 1px 0 rgba(0, 0, 0, .35);
+        }
+
+        .mm-discount-badge::before {
+            content: "";
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, #fff5c0, #ffd966 60%, #b8893c);
+            box-shadow: 0 0 5px rgba(255, 217, 102, .9);
+            display: inline-block;
+        }
+    </style>
+</head>
+
 <body>
 
     <!-- ================= NAVBAR ================= -->
-
     <?php include_once './includes/nav-bar.php'; ?>
 
 
@@ -135,6 +243,10 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                                             <path d="M12 22V12" />
                                         </svg>
                                     <?php endif; ?>
+
+                                    <?php if ($discountBadgeText): ?>
+                                        <span class="mm-discount-badge"><?= htmlspecialchars($discountBadgeText) ?></span>
+                                    <?php endif; ?>
                                 </div>
 
                                 <p class="mm-product-cat"><?= htmlspecialchars($p['category_name'] ?? '') ?></p>
@@ -184,10 +296,8 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
     <?php include_once './includes/sticky-cart.php'; ?>
 
 
-
     <!-- ================= MOBILE BOTTOM NAV ================= -->
     <?php include_once './includes/mobile-nav-bar.php'; ?>
-
 
 
     <!-- ================= LOGIN POPUP ================= -->
@@ -202,7 +312,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
     <?php include_once './includes/variant-poup.php'; ?>
 
 
-
     <div id="mmToast"></div>
 
 
@@ -212,6 +321,7 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
         window.ADMIN_URL = "<?= ADMIN_URL ?>";
         window.IS_LOGGED_IN = <?= $customerLoggedIn ? 'true' : 'false' ?>;
         window.CART_COUNT = <?= (int)$cartCount ?>;
+        window.DISCOUNT = <?= json_encode($currentDiscount, JSON_UNESCAPED_UNICODE) ?>;
     </script>
 
     <script>
