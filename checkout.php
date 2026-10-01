@@ -8,15 +8,109 @@ $siteName = $settings['username'] ?? 'Mrs Mill@';
 $logoUrl  = !empty($settings['logo_image'])    ? ADMIN_URL . $settings['logo_image']    : '';
 $favicon  = !empty($settings['favicon_image']) ? ADMIN_URL . $settings['favicon_image'] : '';
 
-/* Logged-in customer */
+/* =========================================================
+   LOGGED-IN CUSTOMER
+   ========================================================= */
 $customerLoggedIn = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0;
-$customerName     = $_SESSION['customer_name'] ?? '';
-$customerMobile   = $_SESSION['customer_mobile'] ?? '';
+$customerId       = $customerLoggedIn ? (int)$_SESSION['customer_id'] : 0;
 
-/* Cart */
-$cart      = $_SESSION['cart'] ?? [];
+$customerName    = $_SESSION['customer_name']   ?? '';
+$customerMobile  = $_SESSION['customer_mobile'] ?? '';
+
+/* Fetch full customer profile (apartment + division auto-fill) */
+$customerApartmentId   = 0;
+$customerApartmentCode = '';
+$customerApartmentName = '';
+$customerDivision      = '';
+$customerDivisionCharge = 0;
+
+if ($customerId > 0) {
+    try {
+        $cStmt = $pdo->prepare(
+            "SELECT full_name, mobile_number,
+                    apartment_id, apartment_code, apartment_name,
+                    division, division_charge
+             FROM customers
+             WHERE id = ? AND status = 1
+             LIMIT 1"
+        );
+        $cStmt->execute([$customerId]);
+        $cust = $cStmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($cust) {
+            $customerName    = $cust['full_name']     ?: $customerName;
+            $customerMobile  = $cust['mobile_number'] ?: $customerMobile;
+
+            $customerApartmentId    = (int)($cust['apartment_id'] ?? 0);
+            $customerApartmentCode  = $cust['apartment_code'] ?? '';
+            $customerApartmentName  = $cust['apartment_name'] ?? '';
+            $customerDivision       = $cust['division'] ?? '';
+            $customerDivisionCharge = (float)($cust['division_charge'] ?? 0);
+        }
+    } catch (PDOException $e) {
+        /* ignore */
+    }
+}
+
+/* =========================================================
+   LOAD CART
+   → DB (customer_cart) for logged-in
+   → $_SESSION['cart'] for guests
+   ========================================================= */
+$cart = [];
+
+if ($customerId > 0) {
+    try {
+        $stmt = $pdo->prepare(
+            "SELECT id AS cart_id, menu_code, product_id, product_code AS code, product_name AS name,
+            product_image AS image, variant_id, variant_name, variant_qty,
+            price, qty
+     FROM customer_cart
+     WHERE customer_id = ?
+     ORDER BY id ASC"
+        );
+        $stmt->execute([$customerId]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($rows as $r) {
+            $cart[] = [
+                'cart_id'      => $r['cart_id'],
+                'product_id'   => (int)$r['product_id'],
+                'code'         => $r['code'],
+                'name'         => $r['name'],
+                'image'        => $r['image'],
+                'variant_id'   => (int)$r['variant_id'],
+                'variant_name' => $r['variant_name'],
+                'variant_qty'  => $r['variant_qty'],
+                'price'        => (float)$r['price'],
+                'qty'          => (int)$r['qty'],
+            ];
+        }
+    } catch (PDOException $e) {
+        $cart = [];
+    }
+} else {
+    if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
+        foreach ($_SESSION['cart'] as $c) {
+            $cart[] = [
+                'cart_id'      => $c['key'] ?? '',
+                'product_id'   => (int)($c['product_id'] ?? 0),
+                'code'         => $c['code'] ?? '',
+                'name'         => $c['name'] ?? '',
+                'image'        => $c['image'] ?? '',
+                'variant_id'   => (int)($c['variant_id'] ?? 0),
+                'variant_name' => $c['variant_name'] ?? '',
+                'variant_qty'  => $c['variant_qty'] ?? '',
+                'price'        => (float)($c['price'] ?? 0),
+                'qty'          => (int)($c['qty'] ?? 0),
+            ];
+        }
+    }
+}
+
+/* Compute totals */
 $cartCount = 0;
-$cartTotal = 0;
+$cartTotal = 0.0;
 foreach ($cart as $c) {
     $qty        = (int)($c['qty'] ?? 0);
     $cartCount += $qty;
@@ -357,7 +451,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                             </label>
                         </div>
 
-                        <!-- Store info + Branch dropdown shown only for pickup -->
                         <div class="mm-pickup-info" id="pickupInfo">
                             <div class="mm-pickup-row">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -396,11 +489,12 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                                     <path d="M9 21V12h6v9" />
                                 </svg>
                                 <input type="text" id="coApartmentSearch" class="mm-co-input"
-                                    placeholder="Search apartment..." autocomplete="off">
+                                    placeholder="Search apartment..." autocomplete="off"
+                                    value="<?= htmlspecialchars($customerApartmentName) ?>">
                             </div>
 
-                            <input type="hidden" id="coApartmentId">
-                            <input type="hidden" id="coApartmentCode">
+                            <input type="hidden" id="coApartmentId" value="<?= $customerApartmentId > 0 ? (int)$customerApartmentId : '' ?>">
+                            <input type="hidden" id="coApartmentCode" value="<?= htmlspecialchars($customerApartmentCode) ?>">
 
                             <div id="apartmentResults" class="mm-co-dropdown" role="listbox"></div>
                         </div>
@@ -515,8 +609,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
     </main>
 
 
-    <!-- ================= STICKY CART BAR ================= -->
-    <?php include_once './includes/sticky-cart.php'; ?>
 
 
     <!-- ================= MOBILE BOTTOM NAV ================= -->
@@ -547,6 +639,13 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
         window.RAZORPAY_KEY_ID = "<?= htmlspecialchars($razorpayKeyId) ?>";
         window.CUSTOMER_NAME = "<?= htmlspecialchars($customerName, ENT_QUOTES) ?>";
         window.CUSTOMER_MOBILE = "<?= htmlspecialchars($customerMobile, ENT_QUOTES) ?>";
+
+        /* ✅ Auto-fill address from customer profile */
+        window.CUSTOMER_APARTMENT_ID = <?= (int)$customerApartmentId ?>;
+        window.CUSTOMER_APARTMENT_CODE = "<?= htmlspecialchars($customerApartmentCode, ENT_QUOTES) ?>";
+        window.CUSTOMER_APARTMENT_NAME = "<?= htmlspecialchars($customerApartmentName, ENT_QUOTES) ?>";
+        window.CUSTOMER_DIVISION = "<?= htmlspecialchars($customerDivision, ENT_QUOTES) ?>";
+        window.CUSTOMER_DIVISION_CHARGE = <?= (float)$customerDivisionCharge ?>;
     </script>
 
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>

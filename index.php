@@ -118,7 +118,7 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
         .mm-discount-badge {
             position: absolute;
             bottom: 10px;
-           left: 10px;
+            left: 10px;
             top: auto;
             right: auto;
             display: inline-flex;
@@ -218,7 +218,7 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
 
 
                 <!-- ============= TODAY'S MENU ============= -->
-                <section style="margin-top:48px;">
+                <section style="margin-top:48px; margin-bottom:80px;">
                     <div class="mm-section-head">
                         <div>
                             <h2 class="mm-section-title">Today's Menu</h2>
@@ -333,13 +333,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                 behavior: "smooth"
             });
         }
-
-        (function() {
-            var bar = document.getElementById('stickyCartBar');
-            var count = Number(window.CART_COUNT || 0);
-            if (!bar) return;
-            bar.style.display = count > 0 ? 'flex' : 'none';
-        })();
     </script>
 
     <script src="<?= MAIN_URL ?>js/home.js"></script>

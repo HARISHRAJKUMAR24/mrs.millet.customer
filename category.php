@@ -212,12 +212,6 @@ $categoryImage = $category ? categoryImageUrl($category['category_image'] ?? '')
 
             <?php else: ?>
 
-                <!-- ============= BREADCRUMB ============= -->
-                <nav class="mm-crumb" aria-label="Breadcrumb">
-                    <a href="<?= MAIN_URL ?>">Home</a>
-                    <span class="sep">/</span>
-                    <span style="color:#302923;font-weight:600;"><?= htmlspecialchars($category['category_name']) ?></span>
-                </nav>
 
                 <!-- ============= CATEGORY HEADER ============= -->
                 <section class="mm-cat-head">

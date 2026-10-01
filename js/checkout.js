@@ -7,6 +7,7 @@
     "use strict";
 
     const MAIN_URL = window.MAIN_URL || "./";
+    const IS_LOGGED_IN = !!window.IS_LOGGED_IN;
 
     /* ---------- DOM ---------- */
     const mobileInput       = document.getElementById("coMobile");
@@ -40,6 +41,7 @@
     let apartmentsCache     = [];
     let divisionsCache      = [];
     let branchesCache       = [];
+    let apartmentsLoaded    = false;
     let selectedDivision    = null;
     let subtotal            = Number(window.CART_SUBTOTAL || 0);
     let deliveryCharge      = 0;
@@ -71,12 +73,14 @@
     }
 
     /* =========================================================
-       BRANCHES
+       BRANCHES  (only fetch when pickup tab is opened first time)
        ========================================================= */
+    let branchesLoaded = false;
     function loadBranches() {
-        if (!pickupBranchSelect) return;
+        if (!pickupBranchSelect || branchesLoaded) return;
+        branchesLoaded = true;
 
-        fetch(MAIN_URL + "ajax/checkout-branches.php", { credentials: "same-origin" })
+        fetch(MAIN_URL + "ajax/get-branches.php", { credentials: "same-origin" })
             .then(r => r.json().catch(() => null))
             .then(res => {
                 if (!res || !res.success || !Array.isArray(res.data)) return;
@@ -92,7 +96,6 @@
             })
             .catch(() => {});
     }
-    loadBranches();
 
     /* =========================================================
        DELIVERY MODE TOGGLE
@@ -104,6 +107,10 @@
             if (addressBlock) addressBlock.classList.add("hidden");
             if (pickupInfo) pickupInfo.classList.add("show");
 
+            /* Lazy load branches first time */
+            loadBranches();
+
+            /* Clear address-only fields */
             if (aptIdInput) aptIdInput.value = "";
             if (aptCodeInput) aptCodeInput.value = "";
             if (aptSearch) aptSearch.value = "";
@@ -116,13 +123,16 @@
             deliveryCharge = 0;
             if (deliveryLabel) deliveryLabel.textContent = "Pickup charge";
             if (deliveryEl) deliveryEl.textContent = "₹0";
-
             if (pickupBranchHint) pickupBranchHint.textContent = "Pick a branch to collect your order from.";
+
         } else {
             if (addressBlock) addressBlock.classList.remove("hidden");
             if (pickupInfo) pickupInfo.classList.remove("show");
 
             if (pickupBranchSelect) pickupBranchSelect.value = "";
+
+            /* Restore customer's saved address + division */
+            restoreCustomerAddress();
 
             if (deliveryLabel) deliveryLabel.textContent = "Delivery charge";
             if (deliveryEl) deliveryEl.textContent = money(deliveryCharge);
@@ -138,17 +148,61 @@
     });
 
     /* =========================================================
-       MOBILE LOOKUP
+       RESTORE CUSTOMER ADDRESS (from DB, no AJAX needed)
+       ========================================================= */
+    function restoreCustomerAddress() {
+        const aptId = Number(window.CUSTOMER_APARTMENT_ID || 0);
+        if (aptId <= 0) return;
+
+        /* Only restore if the fields are empty (i.e. user hasn't picked another) */
+        if (!aptIdInput.value) {
+            aptIdInput.value   = aptId;
+            aptCodeInput.value = window.CUSTOMER_APARTMENT_CODE || "";
+            aptSearch.value    = window.CUSTOMER_APARTMENT_NAME || "";
+        }
+
+        /* If division was already selected keep it */
+        if (selectedDivision) {
+            updateTotals();
+            return;
+        }
+
+        /* Use saved division from customer table directly */
+        const savedDivision = window.CUSTOMER_DIVISION || "";
+        const savedCharge   = Number(window.CUSTOMER_DIVISION_CHARGE || 0);
+
+        if (savedDivision !== "") {
+            divisionInput.value       = savedDivision;
+            divisionSearch.value      = "Division " + savedDivision;
+            selectedDivision          = savedDivision;
+            deliveryCharge            = Math.round(savedCharge);
+            divisionHint.textContent  = "Delivery charge: ₹" + deliveryCharge;
+            divisionField.style.display = "block";
+
+            /* Also fetch dropdown options so user can switch */
+            loadDivisions(aptId, savedDivision, /*keepSelection*/ true);
+        } else {
+            /* No saved division → load options normally */
+            loadDivisions(aptId, "");
+        }
+
+        updateTotals();
+    }
+
+    /* =========================================================
+       MOBILE LOOKUP  (skip if logged-in — data already on page)
        ========================================================= */
     let mobileTimer = null;
     let lastLookupMobile = "";
 
     function runMobileLookup(mobile) {
+        /* If customer is already logged in, we already have their data */
+        if (IS_LOGGED_IN) return;
         if (!mobile || mobile.length < 10) return;
         if (mobile === lastLookupMobile) return;
         lastLookupMobile = mobile;
 
-        fetch(MAIN_URL + "ajax/checkout-lookup-customer.php?mobile=" + encodeURIComponent(mobile), {
+        fetch(MAIN_URL + "ajax/customer-lookup.php?mobile=" + encodeURIComponent(mobile), {
             credentials: "same-origin"
         })
             .then(r => r.json().catch(() => null))
@@ -184,46 +238,57 @@
             .catch(() => {});
     }
 
-    mobileInput?.addEventListener("input", () => {
-        mobileInput.value = mobileInput.value.replace(/[^0-9]/g, "").slice(0, 15);
-        clearTimeout(mobileTimer);
-
-        const m = mobileInput.value.trim();
-        lastLookupMobile = "";
-
-        if (m.length < 10) return;
-
-        mobileTimer = setTimeout(() => runMobileLookup(m), 350);
-    });
-
-    mobileInput?.addEventListener("blur", () => {
-        const m = mobileInput.value.trim();
-        if (m.length >= 10) {
+    if (!IS_LOGGED_IN) {
+        mobileInput?.addEventListener("input", () => {
+            mobileInput.value = mobileInput.value.replace(/[^0-9]/g, "").slice(0, 15);
             clearTimeout(mobileTimer);
-            runMobileLookup(m);
-        }
-    });
 
-    mobileInput?.addEventListener("paste", () => {
-        setTimeout(() => {
             const m = mobileInput.value.trim();
-            if (m.length >= 10) runMobileLookup(m);
-        }, 50);
-    });
+            lastLookupMobile = "";
+
+            if (m.length < 10) return;
+
+            mobileTimer = setTimeout(() => runMobileLookup(m), 350);
+        });
+
+        mobileInput?.addEventListener("blur", () => {
+            const m = mobileInput.value.trim();
+            if (m.length >= 10) {
+                clearTimeout(mobileTimer);
+                runMobileLookup(m);
+            }
+        });
+
+        mobileInput?.addEventListener("paste", () => {
+            setTimeout(() => {
+                const m = mobileInput.value.trim();
+                if (m.length >= 10) runMobileLookup(m);
+            }, 50);
+        });
+    }
 
     /* =========================================================
-       APARTMENT SEARCH
+       APARTMENT SEARCH  (lazy-load cache on first open)
        ========================================================= */
-    function loadApartments() {
-        fetch(MAIN_URL + "ajax/checkout-apartments.php", { credentials: "same-origin" })
+    function loadApartments(cb) {
+        if (apartmentsLoaded) {
+            if (typeof cb === "function") cb();
+            return;
+        }
+        apartmentsLoaded = true;
+
+        fetch(MAIN_URL + "ajax/get-appartment-divisions.php", { credentials: "same-origin" })
             .then(r => r.json().catch(() => null))
             .then(res => {
-                if (!res || !res.success || !Array.isArray(res.data)) return;
-                apartmentsCache = res.data;
+                if (res && res.success && Array.isArray(res.data)) {
+                    apartmentsCache = res.data;
+                }
+                if (typeof cb === "function") cb();
             })
-            .catch(() => {});
+            .catch(() => {
+                if (typeof cb === "function") cb();
+            });
     }
-    loadApartments();
 
     function renderApartmentResults(query) {
         if (!aptResults) return;
@@ -253,8 +318,13 @@
         aptResults.classList.add("open");
     }
 
-    aptSearch?.addEventListener("focus", () => renderApartmentResults(aptSearch.value));
-    aptSearch?.addEventListener("input", () => renderApartmentResults(aptSearch.value));
+    aptSearch?.addEventListener("focus", () => {
+        loadApartments(() => renderApartmentResults(aptSearch.value));
+    });
+
+    aptSearch?.addEventListener("input", () => {
+        loadApartments(() => renderApartmentResults(aptSearch.value));
+    });
 
     aptResults?.addEventListener("click", (e) => {
         const item = e.target.closest(".mm-co-dd-item");
@@ -265,7 +335,7 @@
         aptSearch.value    = item.dataset.name;
         aptResults.classList.remove("open");
 
-        loadDivisions(item.dataset.id);
+        loadDivisions(item.dataset.id, "");
     });
 
     document.addEventListener("click", (e) => {
@@ -280,31 +350,35 @@
     /* =========================================================
        DIVISIONS
        ========================================================= */
-    function loadDivisions(apartmentId, preselect) {
+    function loadDivisions(apartmentId, preselect, keepSelection) {
         if (!apartmentId || getCheckedMode() === "pickup") return;
 
-        fetch(MAIN_URL + "ajax/checkout-divisions.php?apartment_id=" + encodeURIComponent(apartmentId), {
+        fetch(MAIN_URL + "ajax/get-appartment-divisions.php?apartment_id=" + encodeURIComponent(apartmentId), {
             credentials: "same-origin"
         })
             .then(r => r.json().catch(() => null))
             .then(res => {
                 if (!res || !res.success || !Array.isArray(res.data)) {
-                    hideDivisionField();
+                    if (!keepSelection) hideDivisionField();
                     return;
                 }
                 divisionsCache = res.data;
                 if (!divisionsCache.length) {
-                    hideDivisionField();
+                    if (!keepSelection) hideDivisionField();
                     return;
                 }
 
                 divisionField.style.display = "block";
-                divisionSearch.value = "";
-                divisionInput.value  = "";
-                divisionHint.textContent = "";
-                selectedDivision = null;
-                deliveryCharge = 0;
-                updateTotals();
+
+                /* If keepSelection, don't reset the visible division */
+                if (!keepSelection) {
+                    divisionSearch.value = "";
+                    divisionInput.value  = "";
+                    divisionHint.textContent = "";
+                    selectedDivision = null;
+                    deliveryCharge = 0;
+                    updateTotals();
+                }
 
                 if (preselect) {
                     const match = divisionsCache.find(d => String(d.division) === String(preselect));
@@ -390,6 +464,15 @@
         }
     }
     updateTotals();
+
+    /* =========================================================
+       AUTO-FILL ADDRESS FROM CUSTOMER PROFILE (on load)
+       ========================================================= */
+    (function autoFillAddress() {
+        if (Number(window.CUSTOMER_APARTMENT_ID || 0) > 0) {
+            restoreCustomerAddress();
+        }
+    })();
 
     /* =========================================================
        PAY NOW
