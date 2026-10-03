@@ -1,33 +1,47 @@
 <?php
+/* =========================================================
+   MRS MILL@ — GET APARTMENTS + DIVISIONS (for register popup)
+   File: ./ajax/get-appartment-divisions.php
+   ========================================================= */
+
 require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/../config/function.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
-$id = (int)($_GET['apartment_id'] ?? 0);
-if ($id <= 0) jsonResponse(false, 'Invalid apartment.');
-
 try {
-    $stmt = $pdo->prepare("SELECT divisions FROM apartments WHERE id = ? AND status = 1 LIMIT 1");
-    $stmt->execute([$id]);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $stmt = $pdo->query(
+        "SELECT id, apartment_code, apartment_name, apartment_address, divisions
+         FROM apartments
+         WHERE status = 1
+         ORDER BY apartment_name ASC"
+    );
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    if (!$row) jsonResponse(false, 'Apartment not found.');
+    $out = [];
+    foreach ($rows as $r) {
+        $divs = json_decode($r['divisions'] ?? '[]', true);
+        if (!is_array($divs)) $divs = [];
 
-    $divisions = json_decode($row['divisions'] ?? '[]', true);
-    if (!is_array($divisions)) $divisions = [];
+        $clean = [];
+        foreach ($divs as $d) {
+            if (!isset($d['division'])) continue;
+            $clean[] = [
+                'division' => (string)$d['division'],
+                'charge'   => (float)($d['charge'] ?? 0)
+            ];
+        }
 
-    /* Normalize: [{division:"1", charge:30}, ...] */
-    $clean = [];
-    foreach ($divisions as $d) {
-        if (!isset($d['division'])) continue;
-        $clean[] = [
-            'division' => (string)$d['division'],
-            'charge'   => (float)($d['charge'] ?? 0)
+        $out[] = [
+            'id'                => (int)$r['id'],
+            'apartment_code'    => $r['apartment_code'],
+            'apartment_name'    => $r['apartment_name'],
+            'apartment_address' => $r['apartment_address'],
+            'divisions'         => $clean
         ];
     }
 
-    jsonResponse(true, 'OK', $clean);
+    jsonResponse(true, 'OK', $out);
 } catch (PDOException $e) {
-    jsonResponse(false, 'Failed to load divisions.');
+    jsonResponse(false, 'Failed to load apartments.');
 }

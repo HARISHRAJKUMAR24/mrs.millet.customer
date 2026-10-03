@@ -1,6 +1,6 @@
 /* =========================================================
    MRS MILL@ — CUSTOMER STORE
-   File: ./js/customer-store.js
+   File: ./js/home.js
    ========================================================= */
 
 (function () {
@@ -10,39 +10,41 @@
     let IS_LOGGED_IN = !!window.IS_LOGGED_IN;
 
     /* ---------- DOM ---------- */
-    const loginOverlay = document.getElementById("loginOverlay");
-    const loginForm = document.getElementById("loginForm");
-    const loginMobile = document.getElementById("loginMobile");
-    const loginPassword = document.getElementById("loginPassword");
+    const loginOverlay       = document.getElementById("loginOverlay");
+    const loginForm          = document.getElementById("loginForm");
+    const loginMobile        = document.getElementById("loginMobile");
+    const loginPassword      = document.getElementById("loginPassword");
     const loginPasswordField = document.getElementById("loginPasswordField");
-    const loginBtn = document.getElementById("loginBtn");
-    const loginBtnText = document.getElementById("loginBtnText");
-    const loginClose = document.getElementById("loginClose");
-    const navLoginBtn = document.getElementById("navLoginBtn");
+    const loginBtn           = document.getElementById("loginBtn");
+    const loginBtnText       = document.getElementById("loginBtnText");
+    const loginClose         = document.getElementById("loginClose");
+    const navLoginBtn        = document.getElementById("navLoginBtn");
 
-    const regOverlay = document.getElementById("registerOverlay");
-    const regForm = document.getElementById("registerForm");
-    const regMobile = document.getElementById("regMobile");
-    const regName = document.getElementById("regName");
-    const regPassword = document.getElementById("regPassword");
-    const regAptSearch = document.getElementById("regApartmentSearch");
-    const regAptList = document.getElementById("regApartmentList");
-    const regAptId = document.getElementById("regApartmentId");
-    const regAptCode = document.getElementById("regApartmentCode");
-    const regDivision = document.getElementById("regDivision");
-    const regDivisionHint = document.getElementById("regDivisionHint");
-    const regBtn = document.getElementById("registerBtn");
-    const regBtnText = document.getElementById("registerBtnText");
-    const regClose = document.getElementById("registerClose");
+    const regOverlay        = document.getElementById("registerOverlay");
+    const regForm           = document.getElementById("registerForm");
+    const regMobile         = document.getElementById("regMobile");
+    const regName           = document.getElementById("regName");
+    const regPassword       = document.getElementById("regPassword");
+    const regAptSearch      = document.getElementById("regApartmentSearch");
+    const regAptList        = document.getElementById("regApartmentList");
+    const regAptId          = document.getElementById("regApartmentId");
+    const regAptCode        = document.getElementById("regApartmentCode");
+    const regAptHint        = document.getElementById("regApartmentHint");
+    const regDivision       = document.getElementById("regDivision");
+    const regDivisionText   = document.getElementById("regDivisionText");
+    const regDivisionHint   = document.getElementById("regDivisionHint");
+    const regBtn            = document.getElementById("registerBtn");
+    const regBtnText        = document.getElementById("registerBtnText");
+    const regClose          = document.getElementById("registerClose");
 
-    const varOverlay = document.getElementById("variantOverlay");
-    const varProductName = document.getElementById("variantProductName");
-    const varProductCode = document.getElementById("variantProductCode");
-    const varList = document.getElementById("variantList");
-    const varAddBtn = document.getElementById("variantAddBtn");
-    const varClose = document.getElementById("variantClose");
+    const varOverlay        = document.getElementById("variantOverlay");
+    const varProductName    = document.getElementById("variantProductName");
+    const varProductCode    = document.getElementById("variantProductCode");
+    const varList           = document.getElementById("variantList");
+    const varAddBtn         = document.getElementById("variantAddBtn");
+    const varClose          = document.getElementById("variantClose");
 
-    const navCartCount = document.getElementById("navCartCount");
+    const navCartCount      = document.getElementById("navCartCount");
 
     /* ---------- STATE ---------- */
     const state = {
@@ -52,7 +54,8 @@
         cartCount: Number(window.CART_COUNT || 0),
         apartmentsCache: [],
         lookupTimer: null,
-        lastLookedMobile: ""
+        lastLookedMobile: "",
+        customApartment: false   /* true when user typed an apartment not in the list */
     };
 
     /* ---------- HELPERS ---------- */
@@ -90,7 +93,34 @@
     }
 
     /* =========================================================
-       LIVE CART UI PAINTER  (works on every page)
+       PASSWORD EYE TOGGLE (global)
+       ========================================================= */
+    document.addEventListener("click", function (e) {
+        const btn = e.target.closest(".pw-toggle");
+        if (!btn) return;
+
+        const targetId = btn.getAttribute("data-target");
+        const input = document.getElementById(targetId);
+        if (!input) return;
+
+        const eyeOpen   = btn.querySelector(".eye-open");
+        const eyeClosed = btn.querySelector(".eye-closed");
+
+        if (input.type === "password") {
+            input.type = "text";
+            if (eyeOpen)   eyeOpen.style.display   = "none";
+            if (eyeClosed) eyeClosed.style.display = "";
+            btn.setAttribute("aria-label", "Hide password");
+        } else {
+            input.type = "password";
+            if (eyeOpen)   eyeOpen.style.display   = "";
+            if (eyeClosed) eyeClosed.style.display = "none";
+            btn.setAttribute("aria-label", "Show password");
+        }
+    });
+
+    /* =========================================================
+       LIVE CART UI PAINTER
        ========================================================= */
     function paintCartUI(count, total) {
         count = Number(count) || 0;
@@ -98,18 +128,16 @@
         state.cartCount = count;
         window.CART_COUNT = count;
 
-        /* Navbar badge */
         if (navCartCount) navCartCount.textContent = count;
         document.querySelectorAll(".js-cart-count, [data-cart-count]").forEach(el => {
             el.textContent = count;
         });
 
-        /* Sticky cart bar */
-        const bar = document.getElementById("stickyCartBar");
-        const stickyC = document.getElementById("stickyCartCount");
-        const stickyT = document.getElementById("stickyCartTotal");
+        const bar      = document.getElementById("stickyCartBar");
+        const stickyC  = document.getElementById("stickyCartCount");
+        const stickyT  = document.getElementById("stickyCartTotal");
         const stickyLb = document.getElementById("stickyCartItemLabel");
-        const itemLbl = bar ? bar.querySelector(".mm-cart-items span:last-child") : null;
+        const itemLbl  = bar ? bar.querySelector(".mm-cart-items span:last-child") : null;
 
         if (stickyC) stickyC.textContent = count;
         if (stickyT) stickyT.textContent = "₹" + Math.round(total);
@@ -117,25 +145,19 @@
         if (itemLbl) itemLbl.textContent = count === 1 ? "item" : "items";
         if (bar) bar.style.display = count > 0 ? "flex" : "none";
 
-        /* Cart page header */
-        const headCount = document.getElementById("cartHeaderCount");
+        const headCount  = document.getElementById("cartHeaderCount");
         const headPlural = document.getElementById("cartHeaderPlural");
         if (headCount) headCount.textContent = count;
         if (headPlural) headPlural.textContent = count === 1 ? "" : "s";
 
-        /* Cart page summary */
-        const sumSub = document.getElementById("summarySubtotal");
+        const sumSub   = document.getElementById("summarySubtotal");
         const sumTotal = document.getElementById("summaryTotal");
         if (sumSub) sumSub.textContent = "₹" + Math.round(total);
         if (sumTotal) sumTotal.textContent = "₹" + Math.round(total);
     }
 
-    /* Legacy alias used elsewhere in this file */
-    function updateCartBadges(count, total) {
-        paintCartUI(count, total);
-    }
+    function updateCartBadges(count, total) { paintCartUI(count, total); }
 
-    /* Fetch latest count from server and paint */
     let cartInflight = null;
     function refreshCartUI() {
         if (cartInflight) return cartInflight;
@@ -158,11 +180,9 @@
         return cartInflight;
     }
 
-    /* Expose globally so cart-page.js can reuse */
     window.refreshCartUI = refreshCartUI;
     window.paintCartUI = paintCartUI;
 
-    /* Auto-sync when tab becomes visible / focused */
     document.addEventListener("visibilitychange", () => {
         if (!document.hidden) refreshCartUI();
     });
@@ -171,7 +191,6 @@
         if (e.persisted) refreshCartUI();
     });
 
-    /* On page load — sync with server (fixes stale count) */
     document.addEventListener("DOMContentLoaded", refreshCartUI);
     if (document.readyState !== "loading") refreshCartUI();
 
@@ -214,9 +233,7 @@
             if (m.length < 10) return;
             if (m === state.lastLookedMobile) return;
 
-            state.lookupTimer = setTimeout(() => {
-                autoLookupMobile(m);
-            }, 350);
+            state.lookupTimer = setTimeout(() => { autoLookupMobile(m); }, 350);
         });
 
         loginMobile.addEventListener("blur", function () {
@@ -249,14 +266,14 @@
                     }
                 }
             })
-            .catch(() => { });
+            .catch(() => {});
     }
 
     if (loginForm) {
         loginForm.addEventListener("submit", function (e) {
             e.preventDefault();
 
-            const mobile = (loginMobile.value || "").trim();
+            const mobile   = (loginMobile.value || "").trim();
             const password = (loginPassword.value || "").trim();
 
             if (!/^[0-9]{10,15}$/.test(mobile)) {
@@ -351,10 +368,20 @@
         if (regName) regName.value = (customerData && customerData.name) ? customerData.name : "";
         if (regPassword) regPassword.value = "";
         if (regAptList) regAptList.style.display = "none";
+        if (regAptHint) regAptHint.textContent = "";
 
+        /* Reset custom mode */
+        state.customApartment = false;
+
+        /* Reset division UI */
         if (regDivision) {
             regDivision.innerHTML = '<option value="">Select apartment first</option>';
             regDivision.disabled = true;
+            regDivision.style.display = "";
+        }
+        if (regDivisionText) {
+            regDivisionText.value = "";
+            regDivisionText.style.display = "none";
         }
         if (regDivisionHint) regDivisionHint.textContent = "";
         if (regBtnText) regBtnText.textContent = "Create Account";
@@ -410,7 +437,7 @@
         if (!regAptList) return;
 
         if (state.apartmentsCache.length === 0) {
-            regAptList.innerHTML = `<div style="padding:14px;text-align:center;font-size:12px;color:#948c82;">No apartments available.</div>`;
+            regAptList.innerHTML = `<div style="padding:14px;text-align:center;font-size:12px;color:#948c82;">No apartments available. You can type your own.</div>`;
             regAptList.style.display = "block";
             return;
         }
@@ -426,7 +453,9 @@
         }
 
         if (!list.length) {
-            regAptList.innerHTML = `<div style="padding:14px;text-align:center;font-size:12px;color:#948c82;">No matches found</div>`;
+            regAptList.innerHTML = `<div style="padding:14px;text-align:center;font-size:12px;color:#948c82;">
+                No matches found. Keep typing to request a new apartment.
+            </div>`;
             regAptList.style.display = "block";
             return;
         }
@@ -452,6 +481,14 @@
 
         const divs = Array.isArray(apt.divisions) ? apt.divisions : [];
 
+        /* Known apartment → show SELECT dropdown */
+        state.customApartment = false;
+        if (regDivisionText) {
+            regDivisionText.value = "";
+            regDivisionText.style.display = "none";
+        }
+        regDivision.style.display = "";
+
         if (!divs.length) {
             regDivision.innerHTML = '<option value="">No divisions</option>';
             regDivision.disabled = true;
@@ -474,9 +511,71 @@
         }
     }
 
+    /* Called when user typed an apartment that is NOT in the list */
+    function enableCustomApartmentMode() {
+        state.customApartment = true;
+
+        if (regAptId) regAptId.value = "";
+        if (regAptCode) regAptCode.value = "";
+        if (regAptHint) regAptHint.textContent = "We'll save your request — our team will contact you to confirm.";
+
+        /* Swap division select → free-text input */
+        if (regDivision) {
+            regDivision.value = "";
+            regDivision.disabled = true;
+            regDivision.style.display = "none";
+        }
+        if (regDivisionText) {
+            regDivisionText.style.display = "";
+        }
+        if (regDivisionHint) {
+            regDivisionHint.textContent = "Type your division (e.g. 4, Block B, Tower 2).";
+        }
+    }
+
     if (regAptSearch) {
         regAptSearch.addEventListener("focus", () => renderRegAptList(regAptSearch.value));
-        regAptSearch.addEventListener("input", () => renderRegAptList(regAptSearch.value));
+
+        regAptSearch.addEventListener("input", function () {
+            const typed = this.value.trim();
+
+            /* Clear previously selected id/code — user is retyping */
+            if (regAptId) regAptId.value = "";
+            if (regAptCode) regAptCode.value = "";
+
+            /* Look for exact match in cache */
+            const exact = state.apartmentsCache.find(a =>
+                (a.apartment_name || "").toLowerCase() === typed.toLowerCase()
+            );
+
+            if (exact) {
+                /* Known apartment → normal mode */
+                state.customApartment = false;
+                if (regAptId) regAptId.value = exact.id;
+                if (regAptCode) regAptCode.value = exact.apartment_code;
+                if (regAptHint) regAptHint.textContent = "";
+                populateRegisterDivisions(exact, "");
+            } else if (typed.length > 0) {
+                /* Unknown apartment → custom request mode */
+                enableCustomApartmentMode();
+            } else {
+                /* Empty → reset */
+                state.customApartment = false;
+                if (regAptHint) regAptHint.textContent = "";
+                if (regDivision) {
+                    regDivision.style.display = "";
+                    regDivision.innerHTML = '<option value="">Select apartment first</option>';
+                    regDivision.disabled = true;
+                }
+                if (regDivisionText) {
+                    regDivisionText.value = "";
+                    regDivisionText.style.display = "none";
+                }
+                if (regDivisionHint) regDivisionHint.textContent = "";
+            }
+
+            renderRegAptList(this.value);
+        });
     }
 
     if (regAptList) {
@@ -484,17 +583,19 @@
             const item = e.target.closest(".mm-co-dd-item");
             if (!item) return;
 
-            regAptId.value = item.dataset.id;
-            regAptCode.value = item.dataset.code;
+            /* User picked from list → normal mode */
+            state.customApartment = false;
+
+            regAptId.value     = item.dataset.id;
+            regAptCode.value   = item.dataset.code;
             regAptSearch.value = item.dataset.name;
             regAptList.style.display = "none";
+            if (regAptHint) regAptHint.textContent = "";
 
             let divs = [];
             try {
                 divs = JSON.parse(decodeURIComponent(item.dataset.divisionsEnc || "[]"));
-            } catch (err) {
-                divs = [];
-            }
+            } catch (err) { divs = []; }
 
             const apt = state.apartmentsCache.find(a => Number(a.id) === Number(item.dataset.id));
             if (apt) {
@@ -524,20 +625,46 @@
         }
     });
 
+    /* =========================================================
+       REGISTER SUBMIT
+       ========================================================= */
     if (regForm) {
         regForm.addEventListener("submit", function (e) {
             e.preventDefault();
 
-            const mobile = (regMobile.value || "").trim();
-            const name = (regName.value || "").trim();
+            const mobile   = (regMobile.value || "").trim();
+            const name     = (regName.value || "").trim();
             const password = (regPassword.value || "").trim();
-            const aptId = (regAptId.value || "").trim();
+
+            const aptText  = (regAptSearch.value || "").trim();
+            const aptId    = (regAptId.value || "").trim();
             const division = (regDivision.value || "").trim();
+            const divisionText = (regDivisionText && regDivisionText.style.display !== "none")
+                ? (regDivisionText.value || "").trim()
+                : "";
 
             if (name.length < 3) { showToast("Please enter your name (3+ chars).", "error"); regName.focus(); return; }
             if (password.length < 3) { showToast("Password must be 3+ characters.", "error"); regPassword.focus(); return; }
-            if (!aptId) { showToast("Please select an apartment.", "error"); regAptSearch.focus(); return; }
-            if (!division) { showToast("Please select a division.", "error"); regDivision.focus(); return; }
+            if (aptText === "") { showToast("Please enter your apartment.", "error"); regAptSearch.focus(); return; }
+
+            /* Determine mode */
+            const isCustom = state.customApartment || !aptId;
+
+            if (isCustom) {
+                /* Custom request → require typed division */
+                if (divisionText === "") {
+                    showToast("Please type your division.", "error");
+                    regDivisionText && regDivisionText.focus();
+                    return;
+                }
+            } else {
+                /* Known apartment → require selected division */
+                if (division === "") {
+                    showToast("Please select a division.", "error");
+                    regDivision.focus();
+                    return;
+                }
+            }
 
             regBtn.disabled = true;
             regBtnText.innerHTML = '<i class="bi bi-hourglass-split"></i> Creating...';
@@ -546,8 +673,14 @@
             fd.append("full_name", name);
             fd.append("mobile_number", mobile);
             fd.append("password", password);
-            fd.append("apartment_id", aptId);
-            fd.append("division", division);
+
+            if (isCustom) {
+                fd.append("custom_apartment", aptText);
+                fd.append("custom_division", divisionText);
+            } else {
+                fd.append("apartment_id", aptId);
+                fd.append("division", division);
+            }
 
             fetch(MAIN_URL + "ajax/customer-register.php", {
                 method: "POST", body: fd, credentials: "same-origin"
@@ -562,6 +695,21 @@
                         return;
                     }
 
+                    /* =========================================================
+                       CUSTOM REQUEST MODE → do NOT log in
+                       ========================================================= */
+                    if (res.data && res.data.request_only) {
+                        closeRegister();
+
+                        if (res.data.already_requested) {
+                            showToast("You've already sent a request. Our team will contact you soon.");
+                        } else {
+                            showToast("Request received! Our team will contact you soon.");
+                        }
+                        return;
+                    }
+
+                    /* Normal registration → log in and reload */
                     IS_LOGGED_IN = true;
                     closeRegister();
                     showToast("Account created!");
@@ -695,16 +843,9 @@
                     const newCount = Number(res.data && res.data.cart_count ? res.data.cart_count : 0);
                     const newTotal = Number(res.data && res.data.cart_total ? res.data.cart_total : 0);
 
-                    /* Update navbar + sticky cart bar with new count */
                     updateCartBadges(newCount, newTotal);
-
-                    /* Close the popup */
                     closeOverlay(varOverlay);
-
-                    /* Just show a toast — NO redirect */
                     showToast("Added to cart.");
-
-                    /* Reset mode flag */
                     state.buyNowMode = false;
                 })
                 .catch(() => {
