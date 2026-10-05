@@ -313,7 +313,7 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
 
 
     <div id="mmToast"></div>
-
+    <?php include_once './includes/footer.php'; ?> 
 
     <!-- ================= GLOBALS ================= -->
     <script>

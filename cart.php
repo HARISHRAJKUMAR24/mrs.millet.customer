@@ -419,22 +419,29 @@ foreach ($items as $it) {
             font-size: 13px;
         }
 
-        .ct-empty a {
+        .ct-empty-btn {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 10px 20px;
-            background: #b51f2c;
-            color: #fff;
-            border-radius: 10px;
+            gap: 5px;
+            padding: 7px 14px;
+            background: #fff;
+            color: #b51f2c;
+            border: 1.5px solid #f0d6d8;
+            border-radius: 9px;
             text-decoration: none;
-            font-size: 12.5px;
+            font-size: 11.5px;
             font-weight: 800;
+            transition: .2s ease;
         }
 
-        .ct-empty a:hover {
-            background: #8e1722;
-            color: #fff;
+        .ct-empty-btn i {
+            font-size: 11px;
+        }
+
+        .ct-empty-btn:hover {
+            background: #fde6e6;
+            border-color: #b51f2c;
+            color: #b51f2c;
         }
     </style>
 </head>
@@ -464,8 +471,8 @@ foreach ($items as $it) {
                     <i class="bi bi-bag-x"></i>
                     <h3>Your cart is empty</h3>
                     <p>Add some products to get started.</p>
-                    <a href="<?= MAIN_URL ?>">
-                        <i class="bi bi-arrow-left"></i>
+                    <a href="<?= MAIN_URL ?>" class="ct-empty-btn">
+                      
                         Continue Shopping
                     </a>
                 </div>
@@ -563,7 +570,7 @@ foreach ($items as $it) {
 
     <div id="mmToast"></div>
 
-
+    <?php include_once './includes/footer.php'; ?>
     <script>
         window.MAIN_URL = "<?= MAIN_URL ?>";
         window.IS_LOGGED_IN = <?= $customerId > 0 ? 'true' : 'false' ?>;

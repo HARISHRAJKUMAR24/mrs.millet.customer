@@ -334,7 +334,7 @@ $categoryImage = $category ? categoryImageUrl($category['category_image'] ?? '')
 
 
     <div id="mmToast"></div>
-
+    <?php include_once './includes/footer.php'; ?> 
 
     <!-- ================= GLOBALS ================= -->
     <script>

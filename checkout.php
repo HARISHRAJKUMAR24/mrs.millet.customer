@@ -533,13 +533,7 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
     <main class="mm-main">
         <div class="mm-container">
 
-            <nav class="mm-crumb" aria-label="Breadcrumb">
-                <a href="<?= MAIN_URL ?>">Home</a>
-                <span class="sep">/</span>
-                <a href="cart.php">Cart</a>
-                <span class="sep">/</span>
-                <span style="color:#302923;font-weight:600;">Checkout</span>
-            </nav>
+           
 
             <section class="mm-co-wrap">
 
@@ -828,7 +822,7 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
     <?php include_once './includes/register-poup.php'; ?>
 
     <div id="mmToast"></div>
-
+    <?php include_once './includes/footer.php'; ?> 
     <script>
         window.MAIN_URL = "<?= MAIN_URL ?>";
         window.ADMIN_URL = "<?= ADMIN_URL ?>";
