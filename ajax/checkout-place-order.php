@@ -1,11 +1,8 @@
 <?php
 /* =========================================================
    MRS MILL@ — PLACE ORDER
-   File: ./ajax/checkout-place-order.php
-   Reads cart from customer_cart (DB) when logged in,
-   from $_SESSION['cart'] for guests.
-   Stock reduced in menu_products using the menu_code stored
-   on each cart line (fallback = currently active menu).
+   Container deposit is stored separately — NOT added to
+   orders.total_amount.
    ========================================================= */
 
 require_once __DIR__ . '/../config/config.php';
@@ -28,6 +25,7 @@ $division         = trim($_POST['division'] ?? '');
 $divisionCharge   = (float)($_POST['division_charge'] ?? 0);
 $pickupBranchId   = (int)($_POST['pickup_branch_id'] ?? 0);
 $pickupBranchName = trim($_POST['pickup_branch_name'] ?? '');
+$walletRequested  = (float)($_POST['wallet_applied'] ?? 0);
 
 if ($name === '' || !preg_match('/^[0-9]{10,15}$/', $mobile)) {
     jsonResponse(false, 'Invalid customer details.');
@@ -39,7 +37,31 @@ $customerId = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] >
     ? (int)$_SESSION['customer_id']
     : 0;
 
-/* ---------- LOAD CART (with menu_code) ---------- */
+/* =========================================================
+   TOP-LEVEL DEFAULTS (fixes "undefined variable" warnings)
+   ========================================================= */
+$items           = [];
+$subtotal        = 0.0;
+$totalContainers = 0;
+$containerAmount = 0.0;
+
+$orderId     = 0;
+$orderCode   = '';
+$grossTotal  = 0.0;
+$apartmentName = '';
+
+/* Wallet vars */
+$walletApplied = 0.0;
+$walletBalance = 0.0;
+$walletBefore  = 0.0;
+$walletAfter   = 0.0;
+
+$deliveryBoyId  = null;
+$activeMenuCode = null;
+$hasOrderItems  = false;
+$paymentStatus  = 'unpaid';
+
+/* ---------- LOAD CART ---------- */
 $cartItems = [];
 
 try {
@@ -69,16 +91,60 @@ if (empty($cartItems)) {
     jsonResponse(false, 'Cart is empty.');
 }
 
+/* ---------- Ensure schema ---------- */
+try {
+    $pdo->exec("ALTER TABLE customers ADD COLUMN wallet_balance DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER division_charge");
+} catch (PDOException $e) {}
+
+try {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS customer_wallet_transactions (
+        id INT(11) NOT NULL AUTO_INCREMENT,
+        customer_id INT(11) NOT NULL,
+        customer_name VARCHAR(150) NOT NULL,
+        customer_mobile VARCHAR(30) NOT NULL,
+        txn_code VARCHAR(30) NOT NULL,
+        txn_type ENUM('credit','debit') NOT NULL,
+        amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        balance_before DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        balance_after DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        source ENUM('admin','staff','system','order','refund') NOT NULL DEFAULT 'admin',
+        note VARCHAR(255) DEFAULT NULL,
+        created_by_id INT(11) DEFAULT NULL,
+        created_by_name VARCHAR(150) DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+        PRIMARY KEY (id),
+        UNIQUE KEY txn_code (txn_code),
+        KEY customer_id (customer_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci");
+} catch (PDOException $e) {}
+
+try {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS order_containers (
+        id INT(11) NOT NULL AUTO_INCREMENT,
+        order_id INT(11) NOT NULL,
+        customer_id INT(11) DEFAULT NULL,
+        total_containers INT(11) NOT NULL DEFAULT 0,
+        received_containers INT(11) NOT NULL DEFAULT 0,
+        container_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        status ENUM('not_received','partial','received') NOT NULL DEFAULT 'not_received',
+        received_at DATETIME DEFAULT NULL,
+        received_by_id INT(11) DEFAULT NULL,
+        received_by_name VARCHAR(150) DEFAULT NULL,
+        note VARCHAR(255) DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),
+        PRIMARY KEY (id),
+        UNIQUE KEY order_unique (order_id),
+        KEY customer_id (customer_id),
+        KEY status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci");
+} catch (PDOException $e) {}
+
 /* =========================================================
    MAIN FLOW
    ========================================================= */
-$orderId   = 0;
-$orderCode = '';
-$total     = 0;
-
 try {
-    $apartmentName = '';
-
+    /* ---------- Address / Pickup validation ---------- */
     if ($deliveryMode === 'delivery') {
         if ($apartmentId <= 0 || $division === '') {
             jsonResponse(false, 'Invalid apartment or division.');
@@ -105,9 +171,7 @@ try {
         $division       = '';
         $divisionCharge = 0;
 
-        if ($pickupBranchId <= 0) {
-            jsonResponse(false, 'Please select a pickup branch.');
-        }
+        if ($pickupBranchId <= 0) jsonResponse(false, 'Please select a pickup branch.');
 
         $bStmt = $pdo->prepare("SELECT branch_name FROM settings_branches WHERE id = ? LIMIT 1");
         $bStmt->execute([$pickupBranchId]);
@@ -117,8 +181,7 @@ try {
         $pickupBranchName = $branchRow['branch_name'];
     }
 
-    /* Auto-assign delivery boy */
-    $deliveryBoyId = null;
+    /* ---------- Auto-assign delivery boy ---------- */
     if ($deliveryMode === 'delivery' && $apartmentCode !== '') {
         try {
             $dBoyStmt = $pdo->prepare(
@@ -135,33 +198,80 @@ try {
         } catch (PDOException $e) {}
     }
 
-    /* Build items + subtotal */
-    $items = [];
-    $subtotal = 0;
+    /* ---------- Build items ---------- */
+    $items           = [];
+    $subtotal        = 0.0;
+    $totalContainers = 0;
+    $containerAmount = 0.0;
+
+    $vStmt = $pdo->prepare(
+        "SELECT container_enabled, container_price FROM product_variants WHERE id = ? LIMIT 1"
+    );
+
     foreach ($cartItems as $c) {
         $qty   = (int)($c['qty'] ?? 0);
         $price = (float)($c['price'] ?? 0);
         $line  = $price * $qty;
         $subtotal += $line;
 
+        $containerEnabled = 0;
+        $containerPrice   = 0.0;
+        $lineContainerAmt = 0.0;
+
+        if (!empty($c['variant_id'])) {
+            $vStmt->execute([(int)$c['variant_id']]);
+            $v = $vStmt->fetch(PDO::FETCH_ASSOC);
+            if ($v && (int)$v['container_enabled'] === 1 && (float)$v['container_price'] > 0) {
+                $containerEnabled = 1;
+                $containerPrice   = (float)$v['container_price'];
+                $lineContainerAmt = $containerPrice * $qty;
+
+                $totalContainers += $qty;
+                $containerAmount += $lineContainerAmt;
+            }
+        }
+
         $items[] = [
-            'menu_code'    => $c['menu_code'] ?? null,   /* ✅ carried through */
-            'product_id'   => (int)($c['product_id'] ?? 0),
-            'code'         => $c['code'] ?? '',
-            'name'         => $c['name'] ?? '',
-            'image'        => $c['image'] ?? '',
-            'variant_id'   => (int)($c['variant_id'] ?? 0),
-            'variant_name' => $c['variant_name'] ?? '',
-            'variant_qty'  => $c['variant_qty'] ?? '',
-            'price'        => $price,
-            'qty'          => $qty,
-            'line_total'   => $line
+            'menu_code'            => $c['menu_code'] ?? null,
+            'product_id'           => (int)($c['product_id'] ?? 0),
+            'code'                 => $c['code'] ?? '',
+            'name'                 => $c['name'] ?? '',
+            'image'                => $c['image'] ?? '',
+            'variant_id'           => (int)($c['variant_id'] ?? 0),
+            'variant_name'         => $c['variant_name'] ?? '',
+            'variant_qty'          => $c['variant_qty'] ?? '',
+            'price'                => $price,
+            'qty'                  => $qty,
+            'line_total'           => $line,
+            'container_enabled'    => $containerEnabled,
+            'container_price'      => $containerEnabled ? $containerPrice : 0,
+            'container_line_total' => $lineContainerAmt,
         ];
     }
 
-    $total = $subtotal + ($deliveryMode === 'delivery' ? $divisionCharge : 0);
+    /* Food + delivery — this is what goes into orders.total_amount */
+    $deliveryPortion  = ($deliveryMode === 'delivery') ? $divisionCharge : 0;
+    $foodPlusDelivery = $subtotal + $deliveryPortion;
 
-    /* Order code */
+    /* Order total = food + delivery (container NOT included) */
+    $grossTotal = $foodPlusDelivery;
+
+    /* ---------- Wallet ---------- */
+    if ($customerId > 0) {
+        $wStmt = $pdo->prepare(
+            "SELECT wallet_balance FROM customers WHERE id = ? LIMIT 1 FOR UPDATE"
+        );
+        $wStmt->execute([$customerId]);
+        $walletBalance = (float)$wStmt->fetchColumn();
+
+        $walletApplied = min($walletRequested, $walletBalance, $foodPlusDelivery);
+        if ($walletApplied < 0) $walletApplied = 0;
+
+        $walletBefore = $walletBalance;
+        $walletAfter  = $walletBalance - $walletApplied;
+    }
+
+    /* ---------- Order code ---------- */
     $last = $pdo->query("SELECT order_code FROM orders ORDER BY id DESC LIMIT 1")->fetchColumn();
     $nextNum = 1;
     if ($last && preg_match('/(\d+)$/', $last, $m)) {
@@ -169,42 +279,64 @@ try {
     }
     $orderCode = 'ORD' . str_pad((string)$nextNum, 6, '0', STR_PAD_LEFT);
 
-    /* ---------- FALLBACK: active menu code ---------- */
-    $activeMenuCode = null;
+    /* ---------- Active menu fallback ---------- */
     try {
         $mStmt = $pdo->query(
             "SELECT menu_code FROM menus
-             WHERE status = 1
-               AND start_at <= NOW()
-               AND end_at   >= NOW()
-             ORDER BY start_at DESC
-             LIMIT 1"
+             WHERE status = 1 AND start_at <= NOW() AND end_at >= NOW()
+             ORDER BY start_at DESC LIMIT 1"
         );
         $activeMenuCode = $mStmt->fetchColumn() ?: null;
-    } catch (PDOException $e) {
-        $activeMenuCode = null;
-    }
+    } catch (PDOException $e) {}
 
-    /* ---------- Stock update statement (menu_products) ---------- */
     $stockStmt = $pdo->prepare(
         "UPDATE menu_products
          SET stock_count = GREATEST(stock_count - ?, 0)
-         WHERE menu_code = ?
-           AND variant_id = ?
-           AND stock_unlimited = 0"
+         WHERE menu_code = ? AND variant_id = ? AND stock_unlimited = 0"
     );
 
-    /* Optional order_items table */
-    $hasOrderItems = false;
     try {
         $tblCheck = $pdo->query("SHOW TABLES LIKE 'order_items'");
         $hasOrderItems = (bool)$tblCheck->fetchColumn();
-    } catch (PDOException $e) {
-        $hasOrderItems = false;
-    }
+    } catch (PDOException $e) {}
+
+    /* Payment status */
+    $paymentStatus = !empty($payment_id) ? 'paid' : 'unpaid';
 
     /* ---------- TRANSACTION ---------- */
     $pdo->beginTransaction();
+
+    /* Deduct wallet */
+    if ($walletApplied > 0 && $customerId > 0) {
+        $updW = $pdo->prepare(
+            "UPDATE customers SET wallet_balance = ?, updated_at = NOW() WHERE id = ?"
+        );
+        $updW->execute([$walletAfter, $customerId]);
+
+        try {
+            $txnCode = 'TXN' . date('ymd') . str_pad((string)random_int(1, 9999), 4, '0', STR_PAD_LEFT);
+
+            $logW = $pdo->prepare(
+                "INSERT INTO customer_wallet_transactions
+                    (customer_id, customer_name, customer_mobile, txn_code,
+                     txn_type, amount, balance_before, balance_after,
+                     source, note, created_by_id, created_by_name, created_at)
+                 VALUES (?, ?, ?, ?, 'debit', ?, ?, ?, 'order', ?, ?, ?, NOW())"
+            );
+            $logW->execute([
+                $customerId,
+                $name,
+                $mobile,
+                $txnCode,
+                $walletApplied,
+                $walletBefore,
+                $walletAfter,
+                'Order ' . $orderCode . ' — wallet payment',
+                $customerId,
+                $name
+            ]);
+        } catch (PDOException $e) {}
+    }
 
     /* Insert order */
     $ins = $pdo->prepare(
@@ -221,7 +353,7 @@ try {
              ?, ?, ?,
              ?, ?,
              ?, ?,
-             ?, 'pending', 'disabled', 'paid', ?, NOW())"
+             ?, 'pending', 'disabled', ?, ?, NOW())"
     );
 
     $ins->execute([
@@ -238,8 +370,9 @@ try {
         $pickupBranchId > 0 ? $pickupBranchId : null,
         $pickupBranchName !== '' ? $pickupBranchName : null,
         $subtotal,
-        $total,
+        $grossTotal,
         json_encode($items, JSON_UNESCAPED_UNICODE),
+        $paymentStatus,
         $payment_id
     ]);
 
@@ -256,7 +389,6 @@ try {
     }
 
     foreach ($items as $it) {
-        /* ✅ Stock minus in menu_products — using the menu_code saved at add-to-cart time */
         if ($it['variant_id'] > 0 && $it['qty'] > 0) {
             $menuForLine = $it['menu_code'] ?: $activeMenuCode;
             if ($menuForLine) {
@@ -283,6 +415,24 @@ try {
         }
     }
 
+    /* Insert container row (if any) */
+    if ($totalContainers > 0) {
+        try {
+            $cIns = $pdo->prepare(
+                "INSERT INTO order_containers
+                    (order_id, customer_id, total_containers, received_containers,
+                     container_amount, status, created_at)
+                 VALUES (?, ?, ?, 0, ?, 'not_received', NOW())"
+            );
+            $cIns->execute([
+                $orderId,
+                $customerId > 0 ? $customerId : null,
+                $totalContainers,
+                $containerAmount
+            ]);
+        } catch (PDOException $e) {}
+    }
+
     /* Clear cart */
     if ($customerId > 0) {
         $pdo->prepare("DELETE FROM customer_cart WHERE customer_id = ?")
@@ -293,20 +443,19 @@ try {
     $pdo->commit();
 
 } catch (PDOException $e) {
-    if ($pdo->inTransaction()) {
-        $pdo->rollBack();
-    }
+    if ($pdo->inTransaction()) $pdo->rollBack();
     jsonResponse(false, 'Server error: ' . $e->getMessage());
 } catch (Throwable $e) {
-    if ($pdo->inTransaction()) {
-        $pdo->rollBack();
-    }
+    if ($pdo->inTransaction()) $pdo->rollBack();
     jsonResponse(false, 'Server error: ' . $e->getMessage());
 }
 
 jsonResponse(true, 'Order placed.', [
-    'order_id'   => $orderId,
-    'order_code' => $orderCode,
-    'total'      => $total,
-    'mode'       => $deliveryMode
+    'order_id'         => $orderId,
+    'order_code'       => $orderCode,
+    'total'            => $grossTotal,
+    'wallet_applied'   => $walletApplied,
+    'container_count'  => $totalContainers,
+    'container_amount' => $containerAmount,
+    'mode'             => $deliveryMode
 ]);

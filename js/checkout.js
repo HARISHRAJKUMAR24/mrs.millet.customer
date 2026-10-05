@@ -36,7 +36,18 @@
     const deliveryLabel     = document.getElementById("deliveryLabel");
     const grandTotalEl      = document.getElementById("grandTotal");
     const payNowBtn         = document.getElementById("payNowBtn");
+    const payNowText        = document.getElementById("payNowText");
     const mobileHint        = document.getElementById("mobileHint");
+
+    const walletRow         = document.getElementById("walletRow");
+    const walletAppliedEl   = document.getElementById("walletApplied");
+    const walletBox         = document.getElementById("walletBox");
+    const walletBalanceEl   = document.getElementById("walletBalance");
+    const walletMsg         = document.getElementById("walletMsg");
+
+    const containerRow      = document.getElementById("containerRow");
+    const containerAmountEl = document.getElementById("containerAmount");
+    const containerCountEl  = document.getElementById("containerCount");
 
     let apartmentsCache     = [];
     let divisionsCache      = [];
@@ -46,6 +57,11 @@
     let subtotal            = Number(window.CART_SUBTOTAL || 0);
     let deliveryCharge      = 0;
     let currentMode         = "delivery";
+
+    /* Wallet + container (from PHP) */
+    const walletBalance     = Number(window.WALLET_BALANCE || 0);
+    const containerTotal    = Number(window.CONTAINER_TOTAL || 0);
+    const containerCount    = Number(window.CONTAINER_COUNT || 0);
 
     /* ---------- Helpers ---------- */
     function money(n) {
@@ -73,7 +89,7 @@
     }
 
     /* =========================================================
-       BRANCHES  (only fetch when pickup tab is opened first time)
+       BRANCHES
        ========================================================= */
     let branchesLoaded = false;
     function loadBranches() {
@@ -107,10 +123,8 @@
             if (addressBlock) addressBlock.classList.add("hidden");
             if (pickupInfo) pickupInfo.classList.add("show");
 
-            /* Lazy load branches first time */
             loadBranches();
 
-            /* Clear address-only fields */
             if (aptIdInput) aptIdInput.value = "";
             if (aptCodeInput) aptCodeInput.value = "";
             if (aptSearch) aptSearch.value = "";
@@ -131,7 +145,6 @@
 
             if (pickupBranchSelect) pickupBranchSelect.value = "";
 
-            /* Restore customer's saved address + division */
             restoreCustomerAddress();
 
             if (deliveryLabel) deliveryLabel.textContent = "Delivery charge";
@@ -148,26 +161,23 @@
     });
 
     /* =========================================================
-       RESTORE CUSTOMER ADDRESS (from DB, no AJAX needed)
+       RESTORE CUSTOMER ADDRESS
        ========================================================= */
     function restoreCustomerAddress() {
         const aptId = Number(window.CUSTOMER_APARTMENT_ID || 0);
         if (aptId <= 0) return;
 
-        /* Only restore if the fields are empty (i.e. user hasn't picked another) */
         if (!aptIdInput.value) {
             aptIdInput.value   = aptId;
             aptCodeInput.value = window.CUSTOMER_APARTMENT_CODE || "";
             aptSearch.value    = window.CUSTOMER_APARTMENT_NAME || "";
         }
 
-        /* If division was already selected keep it */
         if (selectedDivision) {
             updateTotals();
             return;
         }
 
-        /* Use saved division from customer table directly */
         const savedDivision = window.CUSTOMER_DIVISION || "";
         const savedCharge   = Number(window.CUSTOMER_DIVISION_CHARGE || 0);
 
@@ -179,10 +189,8 @@
             divisionHint.textContent  = "Delivery charge: ₹" + deliveryCharge;
             divisionField.style.display = "block";
 
-            /* Also fetch dropdown options so user can switch */
-            loadDivisions(aptId, savedDivision, /*keepSelection*/ true);
+            loadDivisions(aptId, savedDivision, true);
         } else {
-            /* No saved division → load options normally */
             loadDivisions(aptId, "");
         }
 
@@ -190,13 +198,12 @@
     }
 
     /* =========================================================
-       MOBILE LOOKUP  (skip if logged-in — data already on page)
+       MOBILE LOOKUP
        ========================================================= */
     let mobileTimer = null;
     let lastLookupMobile = "";
 
     function runMobileLookup(mobile) {
-        /* If customer is already logged in, we already have their data */
         if (IS_LOGGED_IN) return;
         if (!mobile || mobile.length < 10) return;
         if (mobile === lastLookupMobile) return;
@@ -247,7 +254,6 @@
             lastLookupMobile = "";
 
             if (m.length < 10) return;
-
             mobileTimer = setTimeout(() => runMobileLookup(m), 350);
         });
 
@@ -258,17 +264,10 @@
                 runMobileLookup(m);
             }
         });
-
-        mobileInput?.addEventListener("paste", () => {
-            setTimeout(() => {
-                const m = mobileInput.value.trim();
-                if (m.length >= 10) runMobileLookup(m);
-            }, 50);
-        });
     }
 
     /* =========================================================
-       APARTMENT SEARCH  (lazy-load cache on first open)
+       APARTMENT SEARCH
        ========================================================= */
     function loadApartments(cb) {
         if (apartmentsLoaded) {
@@ -370,7 +369,6 @@
 
                 divisionField.style.display = "block";
 
-                /* If keepSelection, don't reset the visible division */
                 if (!keepSelection) {
                     divisionSearch.value = "";
                     divisionInput.value  = "";
@@ -450,24 +448,73 @@
         updateTotals();
     }
 
+    /* =========================================================
+       TOTALS — container is INFO-ONLY, not part of payable
+       Wallet subtracts live from window.WALLET_BALANCE
+       ========================================================= */
     function updateTotals() {
+        /* ---- Subtotal ---- */
         subTotalEl.textContent = money(subtotal);
 
+        /* ---- Delivery / pickup charge ---- */
         const mode = getCheckedMode();
+        const delivery = (mode === "pickup") ? 0 : Math.round(Number(deliveryCharge || 0));
 
-        if (mode === "pickup") {
-            deliveryEl.textContent = "₹0";
-            grandTotalEl.textContent = money(subtotal);
-        } else {
-            deliveryEl.textContent = money(deliveryCharge);
-            grandTotalEl.textContent = money(subtotal + deliveryCharge);
+        deliveryEl.textContent = money(delivery);
+
+        /* ---- Food + Delivery = what wallet can reduce ---- */
+        const foodPlusDelivery = subtotal + delivery;
+
+        /* ---- Wallet amount actually applied (capped) ---- */
+        /* walletBalance comes from window.WALLET_BALANCE (PHP echo) */
+        const walletUsable = Math.max(0, Math.min(walletBalance, foodPlusDelivery));
+
+        /* ---- Final payable = food + delivery − wallet ---- */
+        const payable = Math.max(0, foodPlusDelivery - walletUsable);
+
+        /* ---- Wallet row ---- */
+        if (walletRow) {
+            if (walletUsable > 0) {
+                walletRow.style.display = "flex";
+                if (walletAppliedEl) walletAppliedEl.textContent = walletUsable;
+            } else {
+                walletRow.style.display = "none";
+            }
+        }
+
+        /* ---- Container row (info only) ---- */
+        if (containerRow) {
+            if (containerTotal > 0) {
+                containerRow.style.display = "flex";
+            } else {
+                containerRow.style.display = "none";
+            }
+        }
+
+        /* ---- Wallet message in banner ---- */
+        if (walletMsg) {
+            if (walletBalance > 0 && walletUsable > 0) {
+                walletMsg.classList.remove("warn");
+                walletMsg.textContent = money(walletUsable) + " applied";
+            } else if (walletBalance > 0) {
+                walletMsg.classList.add("warn");
+                walletMsg.textContent = money(walletBalance) + " available";
+            } else {
+                walletMsg.classList.add("warn");
+                walletMsg.textContent = "No balance";
+            }
+        }
+
+        /* ---- Grand total ---- */
+        grandTotalEl.textContent = money(payable);
+
+        if (payNowText) {
+            payNowText.textContent = payable > 0 ? "Pay Now" : "Place Order";
         }
     }
     updateTotals();
 
-    /* =========================================================
-       AUTO-FILL ADDRESS FROM CUSTOMER PROFILE (on load)
-       ========================================================= */
+    /* Auto-fill address */
     (function autoFillAddress() {
         if (Number(window.CUSTOMER_APARTMENT_ID || 0) > 0) {
             restoreCustomerAddress();
@@ -487,7 +534,6 @@
         const mode = getCheckedMode();
         currentMode = mode;
 
-        let grandTotal = subtotal;
         let aptId = "", aptCode = "", division = "";
         let pickupBranchId = "", pickupBranchName = "";
 
@@ -498,7 +544,6 @@
             if (!aptId) { showToast("Please choose an apartment.", "error"); aptSearch.focus(); return; }
             if (!selectedDivision) { showToast("Please select a division.", "error"); divisionSearch?.focus(); return; }
 
-            grandTotal = subtotal + deliveryCharge;
             division = selectedDivision;
         } else {
             if (!pickupBranchSelect || !pickupBranchSelect.value) {
@@ -511,31 +556,48 @@
             pickupBranchName = opt ? (opt.dataset.name || opt.textContent.trim()) : "";
         }
 
+        /* Payable = food + delivery − wallet (container NOT included) */
+        const delivery = (mode === "pickup") ? 0 : Math.round(Number(deliveryCharge || 0));
+        const foodPlusDelivery = subtotal + delivery;
+        const walletUsable = Math.max(0, Math.min(walletBalance, foodPlusDelivery));
+        const payable      = Math.max(0, foodPlusDelivery - walletUsable);
+
+        const orderPayload = {
+            customer_name: name,
+            customer_mobile: mobile,
+            delivery_mode: mode,
+            apartment_id: aptId,
+            apartment_code: aptCode,
+            division: division,
+            division_charge: delivery,
+            pickup_branch_id: pickupBranchId,
+            pickup_branch_name: pickupBranchName,
+            wallet_applied: walletUsable,
+            container_amount: containerTotal,
+            total: foodPlusDelivery
+        };
+
+        /* Wallet-only → skip Razorpay */
+        if (payable <= 0) {
+            payNowBtn.disabled = true;
+            payNowText.textContent = "Placing...";
+
+            orderPayload.razorpay_payment_id = "WALLET-" + Date.now();
+            finalizeOrder(orderPayload);
+            return;
+        }
+
         const options = {
             key: window.RAZORPAY_KEY_ID,
-            amount: Math.round(grandTotal * 100),
+            amount: Math.round(payable * 100),
             currency: "INR",
             name: "Mrs Mill@",
             description: mode === "pickup" ? "Store pickup order" : "Home delivery order",
-            prefill: {
-                name: name,
-                contact: mobile
-            },
+            prefill: { name: name, contact: mobile },
             theme: { color: "#b51f2c" },
             handler: function (response) {
-                finalizeOrder({
-                    razorpay_payment_id: response.razorpay_payment_id,
-                    customer_name: name,
-                    customer_mobile: mobile,
-                    delivery_mode: mode,
-                    apartment_id: aptId,
-                    apartment_code: aptCode,
-                    division: division,
-                    division_charge: mode === "delivery" ? deliveryCharge : 0,
-                    pickup_branch_id: pickupBranchId,
-                    pickup_branch_name: pickupBranchName,
-                    total: grandTotal
-                });
+                orderPayload.razorpay_payment_id = response.razorpay_payment_id;
+                finalizeOrder(orderPayload);
             },
             modal: {
                 ondismiss: function () { showToast("Payment cancelled."); }
@@ -555,7 +617,7 @@
        ========================================================= */
     function finalizeOrder(payload) {
         payNowBtn.disabled = true;
-        payNowBtn.innerHTML = "Processing...";
+        payNowText.textContent = "Processing...";
 
         const fd = new FormData();
         Object.keys(payload).forEach(k => fd.append(k, payload[k]));
@@ -570,7 +632,7 @@
                 if (!res || !res.success) {
                     showToast((res && res.message) || "Failed to place order.", "error");
                     payNowBtn.disabled = false;
-                    payNowBtn.innerHTML = "Pay Now";
+                    payNowText.textContent = "Pay Now";
                     return;
                 }
                 showToast("Order placed successfully!");
@@ -581,7 +643,7 @@
             .catch(() => {
                 showToast("Unable to connect.", "error");
                 payNowBtn.disabled = false;
-                payNowBtn.innerHTML = "Pay Now";
+                payNowText.textContent = "Pay Now";
             });
     }
 

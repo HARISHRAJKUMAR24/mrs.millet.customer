@@ -17,19 +17,20 @@ $customerId       = $customerLoggedIn ? (int)$_SESSION['customer_id'] : 0;
 $customerName    = $_SESSION['customer_name']   ?? '';
 $customerMobile  = $_SESSION['customer_mobile'] ?? '';
 
-/* Fetch full customer profile (apartment + division auto-fill) */
-$customerApartmentId   = 0;
-$customerApartmentCode = '';
-$customerApartmentName = '';
-$customerDivision      = '';
+$customerApartmentId    = 0;
+$customerApartmentCode  = '';
+$customerApartmentName  = '';
+$customerDivision       = '';
 $customerDivisionCharge = 0;
+$customerWalletBalance  = 0.0;
 
 if ($customerId > 0) {
     try {
         $cStmt = $pdo->prepare(
             "SELECT full_name, mobile_number,
                     apartment_id, apartment_code, apartment_name,
-                    division, division_charge
+                    division, division_charge,
+                    COALESCE(wallet_balance, 0) AS wallet_balance
              FROM customers
              WHERE id = ? AND status = 1
              LIMIT 1"
@@ -46,16 +47,14 @@ if ($customerId > 0) {
             $customerApartmentName  = $cust['apartment_name'] ?? '';
             $customerDivision       = $cust['division'] ?? '';
             $customerDivisionCharge = (float)($cust['division_charge'] ?? 0);
+            $customerWalletBalance  = (float)($cust['wallet_balance'] ?? 0);
         }
     } catch (PDOException $e) {
-        /* ignore */
     }
 }
 
 /* =========================================================
    LOAD CART
-   → DB (customer_cart) for logged-in
-   → $_SESSION['cart'] for guests
    ========================================================= */
 $cart = [];
 
@@ -63,11 +62,11 @@ if ($customerId > 0) {
     try {
         $stmt = $pdo->prepare(
             "SELECT id AS cart_id, menu_code, product_id, product_code AS code, product_name AS name,
-            product_image AS image, variant_id, variant_name, variant_qty,
-            price, qty
-     FROM customer_cart
-     WHERE customer_id = ?
-     ORDER BY id ASC"
+                    product_image AS image, variant_id, variant_name, variant_qty,
+                    price, qty
+             FROM customer_cart
+             WHERE customer_id = ?
+             ORDER BY id ASC"
         );
         $stmt->execute([$customerId]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -75,6 +74,7 @@ if ($customerId > 0) {
         foreach ($rows as $r) {
             $cart[] = [
                 'cart_id'      => $r['cart_id'],
+                'menu_code'    => $r['menu_code'] ?? '',
                 'product_id'   => (int)$r['product_id'],
                 'code'         => $r['code'],
                 'name'         => $r['name'],
@@ -94,6 +94,7 @@ if ($customerId > 0) {
         foreach ($_SESSION['cart'] as $c) {
             $cart[] = [
                 'cart_id'      => $c['key'] ?? '',
+                'menu_code'    => $c['menu_code'] ?? '',
                 'product_id'   => (int)($c['product_id'] ?? 0),
                 'code'         => $c['code'] ?? '',
                 'name'         => $c['name'] ?? '',
@@ -108,7 +109,6 @@ if ($customerId > 0) {
     }
 }
 
-/* Compute totals */
 $cartCount = 0;
 $cartTotal = 0.0;
 foreach ($cart as $c) {
@@ -117,11 +117,49 @@ foreach ($cart as $c) {
     $cartTotal += ((float)($c['price'] ?? 0)) * $qty;
 }
 
-/* Empty cart → home */
 if ($cartCount <= 0) {
     header('Location: ' . MAIN_URL . 'index.php');
     exit;
 }
+
+/* =========================================================
+   CONTAINER DEPOSIT (info only — NOT added to payable)
+   ========================================================= */
+$containerTotal  = 0;
+$totalContainers = 0;
+
+if (!empty($cart)) {
+    try {
+        $vStmt = $pdo->prepare(
+            "SELECT container_enabled, container_price
+             FROM product_variants
+             WHERE id = ? LIMIT 1"
+        );
+
+        foreach ($cart as &$line) {
+            $line['container_enabled']    = 0;
+            $line['container_price']      = 0;
+            $line['container_line_total'] = 0;
+
+            if ($line['variant_id'] > 0) {
+                $vStmt->execute([$line['variant_id']]);
+                $v = $vStmt->fetch(PDO::FETCH_ASSOC);
+                if ($v && (int)$v['container_enabled'] === 1 && (float)$v['container_price'] > 0) {
+                    $line['container_enabled']    = 1;
+                    $line['container_price']      = (float)$v['container_price'];
+                    $line['container_line_total'] = $line['container_price'] * (int)$line['qty'];
+
+                    $containerTotal  += $line['container_line_total'];
+                    $totalContainers += (int)$line['qty'];
+                }
+            }
+        }
+        unset($line);
+    } catch (PDOException $e) {
+    }
+}
+
+$containerTotalRound = (int)round($containerTotal);
 
 /* =========================================================
    CURRENT DISCOUNT
@@ -137,8 +175,7 @@ try {
                 dt.amount_type, dt.discount_amount, dt.delivery_enabled
          FROM discounts d
          INNER JOIN discount_times dt ON dt.discount_code = d.discount_code
-         WHERE d.status = 1
-           AND d.discount_type = 'time'
+         WHERE d.status = 1 AND d.discount_type = 'time'
          ORDER BY dt.id ASC"
     );
     $dStmt->execute();
@@ -174,7 +211,6 @@ try {
         }
     }
 } catch (PDOException $e) {
-    $currentDiscount = null;
 }
 
 if ($currentDiscount && $currentDiscount['amount'] > 0) {
@@ -187,11 +223,29 @@ if ($currentDiscount && $currentDiscount['amount'] > 0) {
     }
 }
 
-$discountedSubtotal = max(0, $cartTotal - $discountAmount);
-
-$cartTotalRound          = (int)round($cartTotal);
+/* ---------- SAFE DEFAULTS ---------- */
+$discountAmount          = (float)($discountAmount ?? 0);
+$discountLabel           = (string)($discountLabel ?? '');
 $discountAmountRound     = (int)round($discountAmount);
+
+$discountedSubtotal      = max(0, $cartTotal - $discountAmount);
 $discountedSubtotalRound = (int)round($discountedSubtotal);
+
+/* =========================================================
+   WALLET + PAYABLE
+   IMPORTANT:
+   - Container deposit is NOT part of payable.
+   - Wallet only reduces what's charged at checkout.
+   - Wallet is capped so it never exceeds food+delivery.
+   ========================================================= */
+$walletBalance      = (float)$customerWalletBalance;
+
+/* Amount wallet will actually reduce (capped to food subtotal) */
+$walletApplied      = min($walletBalance, $discountedSubtotal);
+$payableNow         = max(0, $discountedSubtotal - $walletApplied);
+
+$walletAppliedRound = (int)round($walletApplied);
+$payableNowRound    = (int)round($payableNow);
 
 $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
 ?>
@@ -330,7 +384,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
             display: none !important;
         }
 
-        /* Branch select styling */
         .mm-branch-select {
             width: 100%;
             height: 46px;
@@ -359,16 +412,89 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
             background-color: #fff;
             box-shadow: 0 0 0 4px rgba(181, 31, 44, .08);
         }
+
+        /* Wallet banner */
+        .mm-wallet-box {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 16px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #e8f6ea 0%, #d3edd8 100%);
+            border: 1.5px solid #a7c8a9;
+            margin-top: 14px;
+            margin-bottom: 6px;
+        }
+
+        .mm-wallet-box .left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .mm-wallet-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            background: #1f7a3d;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        .mm-wallet-label {
+            font-size: 10px;
+            font-weight: 800;
+            color: #4e6f52;
+            text-transform: uppercase;
+            letter-spacing: .07em;
+        }
+
+        .mm-wallet-value {
+            font-family: "Playfair Display", serif;
+            font-size: 20px;
+            font-weight: 700;
+            color: #1b5e20;
+            line-height: 1.1;
+            margin-top: 2px;
+        }
+
+        .mm-wallet-msg {
+            font-size: 11.5px;
+            color: #2e7d32;
+            font-weight: 700;
+            text-align: right;
+            line-height: 1.35;
+        }
+
+        .mm-wallet-msg.warn {
+            color: #a35a0e;
+        }
+
+        /* Container info row */
+        .mm-co-row.container-info {
+            color: #b8893c;
+            font-weight: 700;
+        }
+
+        .mm-co-row.container-info .note {
+            font-size: 10px;
+            color: #948c82;
+            font-weight: 600;
+            display: block;
+            margin-top: 2px;
+        }
     </style>
 </head>
 
 <body>
 
-    <!-- ================= NAVBAR ================= -->
     <?php include_once './includes/nav-bar.php'; ?>
 
-
-    <!-- ================= MAIN ================= -->
     <main class="mm-main">
         <div class="mm-container">
 
@@ -385,7 +511,7 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                 <!-- ================= LEFT: FORM ================= -->
                 <form id="checkoutForm" class="mm-co-form" autocomplete="off" novalidate>
 
-                    <!-- ===== Contact ===== -->
+                    <!-- Contact -->
                     <div class="mm-co-card">
                         <h2 class="mm-co-title">Contact</h2>
 
@@ -396,8 +522,7 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                                     <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.2-1.2a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2z" />
                                 </svg>
                                 <input type="tel" id="coMobile" class="mm-co-input"
-                                    placeholder="10-digit mobile"
-                                    maxlength="15" inputmode="numeric"
+                                    placeholder="10-digit mobile" maxlength="15" inputmode="numeric"
                                     value="<?= htmlspecialchars($customerMobile) ?>" required>
                             </div>
                             <p class="mm-co-hint" id="mobileHint">We'll use this for delivery updates.</p>
@@ -417,8 +542,7 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                         </div>
                     </div>
 
-
-                    <!-- ===== Delivery Mode ===== -->
+                    <!-- Delivery Mode -->
                     <div class="mm-co-card">
                         <h2 class="mm-co-title">How would you like to receive?</h2>
 
@@ -476,8 +600,7 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                         </div>
                     </div>
 
-
-                    <!-- ===== Address (hidden when pickup) ===== -->
+                    <!-- Address -->
                     <div class="mm-co-card mm-address-block" id="addressBlock">
                         <h2 class="mm-co-title">Delivery Address</h2>
 
@@ -519,7 +642,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
 
                 </form>
 
-
                 <!-- ================= RIGHT: SUMMARY ================= -->
                 <aside class="mm-co-summary">
                     <h2 class="mm-co-title">Order Summary</h2>
@@ -548,6 +670,9 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                                             · <?= htmlspecialchars($item['variant_qty']) ?>
                                         <?php endif; ?>
                                         · Qty <?= (int)$item['qty'] ?>
+                                        <?php if ((int)$item['container_enabled'] === 1): ?>
+                                            · <span style="color:#b8893c;font-weight:800;">+ Container ₹<?= number_format((float)$item['container_price'], 0) ?></span>
+                                        <?php endif; ?>
                                     </p>
                                 </div>
                                 <div class="mm-co-item-price">
@@ -560,7 +685,7 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                     <div class="mm-co-totals">
                         <div class="mm-co-row">
                             <span>Subtotal</span>
-                            <span id="subTotal">₹<?= number_format($cartTotalRound, 0) ?></span>
+                            <span id="subTotal">₹<?= number_format((int)round($cartTotal), 0) ?></span>
                         </div>
 
                         <?php if ($discountAmountRound > 0): ?>
@@ -581,9 +706,56 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                             <span id="deliveryCharge">₹0</span>
                         </div>
 
+                        <!-- Container deposit — INFO ONLY, not added to payable -->
+                        <div class="mm-co-row container-info" id="containerRow" style="<?= $containerTotalRound > 0 ? '' : 'display:none;' ?>">
+                            <span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" style="vertical-align:-2px;margin-right:4px;">
+                                    <path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                                </svg>
+                                Container deposit (<span id="containerCount"><?= (int)$totalContainers ?></span>)
+                                <span class="note">Refundable — not added to payable</span>
+                            </span>
+                            <span style="color:#b8893c;font-weight:800;">₹<span id="containerAmount"><?= number_format($containerTotalRound, 0) ?></span></span>
+                        </div>
+
+                        <!-- Wallet -->
+                        <div class="mm-co-row" id="walletRow" style="<?= $walletAppliedRound > 0 ? '' : 'display:none;' ?>color:#1f7a3d;">
+                            <span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" style="vertical-align:-2px;margin-right:4px;">
+                                    <rect x="2" y="6" width="20" height="14" rx="2" />
+                                    <path d="M2 10h20" />
+                                </svg>
+                                Wallet applied
+                            </span>
+                            <span style="color:#1f7a3d;font-weight:800;">−₹<span id="walletApplied"><?= number_format($walletAppliedRound, 0) ?></span></span>
+                        </div>
+
                         <div class="mm-co-row mm-co-total">
-                            <span>Total</span>
-                            <span id="grandTotal">₹<?= number_format($discountedSubtotalRound, 0) ?></span>
+                            <span>Payable Now</span>
+                            <span id="grandTotal">₹<?= number_format($payableNowRound, 0) ?></span>
+                        </div>
+                    </div>
+
+                    <!-- Wallet banner -->
+                   <div class="mm-wallet-box" id="walletBox" style="<?= ($customerLoggedIn && $customerWalletBalance > 0) ? '' : 'display:none;' ?>">
+                        <div class="left">
+                            <div class="mm-wallet-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+                                    <rect x="2" y="6" width="20" height="14" rx="2" />
+                                    <path d="M2 10h20" />
+                                </svg>
+                            </div>
+                            <div>
+                                <div class="mm-wallet-label">Wallet Balance</div>
+                                <div class="mm-wallet-value" id="walletBalance">₹<?= number_format((int)round($customerWalletBalance), 0) ?></div>
+                            </div>
+                        </div>
+                        <div class="mm-wallet-msg" id="walletMsg">
+                            <?php if ($walletAppliedRound > 0): ?>
+                                ₹<?= number_format($walletAppliedRound, 0) ?> applied
+                            <?php else: ?>
+                                No balance to apply
+                            <?php endif; ?>
                         </div>
                     </div>
 
@@ -592,7 +764,7 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                             <rect x="2" y="5" width="20" height="14" rx="2" />
                             <path d="M2 10h20" />
                         </svg>
-                        Pay Now
+                        <span id="payNowText">Pay Now</span>
                     </button>
 
                     <p class="mm-co-secure">
@@ -608,25 +780,12 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
         </div>
     </main>
 
-
-
-
-    <!-- ================= MOBILE BOTTOM NAV ================= -->
     <?php include_once './includes/mobile-nav-bar.php'; ?>
-
-
-    <!-- ================= LOGIN POPUP ================= -->
     <?php include_once './includes/login-poup.php'; ?>
-
-
-    <!-- ================= REGISTER POPUP ================= -->
     <?php include_once './includes/register-poup.php'; ?>
-
 
     <div id="mmToast"></div>
 
-
-    <!-- ================= GLOBALS ================= -->
     <script>
         window.MAIN_URL = "<?= MAIN_URL ?>";
         window.ADMIN_URL = "<?= ADMIN_URL ?>";
@@ -637,15 +796,20 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
         window.DISCOUNT_LABEL = "<?= htmlspecialchars($discountLabel) ?>";
         window.DISCOUNT_ACTIVE = <?= $discountAmountRound > 0 ? 'true' : 'false' ?>;
         window.RAZORPAY_KEY_ID = "<?= htmlspecialchars($razorpayKeyId) ?>";
+
         window.CUSTOMER_NAME = "<?= htmlspecialchars($customerName, ENT_QUOTES) ?>";
         window.CUSTOMER_MOBILE = "<?= htmlspecialchars($customerMobile, ENT_QUOTES) ?>";
-
-        /* ✅ Auto-fill address from customer profile */
         window.CUSTOMER_APARTMENT_ID = <?= (int)$customerApartmentId ?>;
         window.CUSTOMER_APARTMENT_CODE = "<?= htmlspecialchars($customerApartmentCode, ENT_QUOTES) ?>";
         window.CUSTOMER_APARTMENT_NAME = "<?= htmlspecialchars($customerApartmentName, ENT_QUOTES) ?>";
         window.CUSTOMER_DIVISION = "<?= htmlspecialchars($customerDivision, ENT_QUOTES) ?>";
         window.CUSTOMER_DIVISION_CHARGE = <?= (float)$customerDivisionCharge ?>;
+
+        window.WALLET_BALANCE = <?= (float)$customerWalletBalance ?>;
+        window.WALLET_APPLIED = <?= (int)$walletAppliedRound ?>;
+        window.PAYABLE_NOW = <?= (int)$payableNowRound ?>;
+        window.CONTAINER_TOTAL = <?= (int)$containerTotalRound ?>;
+        window.CONTAINER_COUNT = <?= (int)$totalContainers ?>;
     </script>
 
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
