@@ -2,7 +2,7 @@
 /* =========================================================
    MRS MILL@ — PLACE ORDER
    Container deposit is stored separately — NOT added to
-   orders.total_amount.
+   orders.total_amount. GST is applied to subtotal only.
    ========================================================= */
 
 require_once __DIR__ . '/../config/config.php';
@@ -37,9 +37,7 @@ $customerId = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] >
     ? (int)$_SESSION['customer_id']
     : 0;
 
-/* =========================================================
-   TOP-LEVEL DEFAULTS (fixes "undefined variable" warnings)
-   ========================================================= */
+/* ---------- DEFAULTS ---------- */
 $items           = [];
 $subtotal        = 0.0;
 $totalContainers = 0;
@@ -50,7 +48,10 @@ $orderCode   = '';
 $grossTotal  = 0.0;
 $apartmentName = '';
 
-/* Wallet vars */
+$taxAmount = 0.0;
+$taxRate   = 0.0;
+$taxType   = 'exclusive';
+
 $walletApplied = 0.0;
 $walletBalance = 0.0;
 $walletBefore  = 0.0;
@@ -249,11 +250,47 @@ try {
         ];
     }
 
-    /* Food + delivery — this is what goes into orders.total_amount */
-    $deliveryPortion  = ($deliveryMode === 'delivery') ? $divisionCharge : 0;
-    $foodPlusDelivery = $subtotal + $deliveryPortion;
+    /* =========================================================
+       APPLY TAX (from settings)
+       - Exclusive : tax = subtotal × rate%   (added on top)
+       - Inclusive : tax inside subtotal      (back-calculated)
+       - Delivery charge is NOT taxed
+       - Container deposit is NOT taxed
+       - Rounded to whole rupee
+    ========================================================= */
+    $settings  = getSettings($pdo);
+    $taxStatus = (int)($settings['tax_status'] ?? 0);
+    $taxRate   = (float)($settings['tax_rate'] ?? 0);
+    $taxType   = strtolower($settings['tax_type'] ?? 'exclusive');
 
-    /* Order total = food + delivery (container NOT included) */
+    if (!in_array($taxType, ['inclusive', 'exclusive'], true)) {
+        $taxType = 'exclusive';
+    }
+
+    $taxAmount           = 0.0;
+    $deliveryPortion     = ($deliveryMode === 'delivery') ? $divisionCharge : 0;
+    $foodPlusDelivery    = 0.0;
+
+    if ($taxStatus === 1 && $taxRate > 0) {
+        if ($taxType === 'inclusive') {
+            $rawTax    = $subtotal - ($subtotal / (1 + ($taxRate / 100)));
+            $taxAmount = round($rawTax);
+            $foodPlusDelivery = $subtotal + $deliveryPortion;
+        } else {
+            $rawTax    = $subtotal * ($taxRate / 100);
+            $taxAmount = round($rawTax);
+            $foodPlusDelivery = $subtotal + $deliveryPortion + $taxAmount;
+        }
+    } else {
+        $taxRate   = 0.0;
+        $taxAmount = 0.0;
+        $foodPlusDelivery = $subtotal + $deliveryPortion;
+    }
+
+    /* Round to whole rupee */
+    $foodPlusDelivery = round($foodPlusDelivery);
+
+    /* Order total = food + delivery + tax (container NOT included) */
     $grossTotal = $foodPlusDelivery;
 
     /* ---------- Wallet ---------- */
@@ -300,7 +337,6 @@ try {
         $hasOrderItems = (bool)$tblCheck->fetchColumn();
     } catch (PDOException $e) {}
 
-    /* Payment status */
     $paymentStatus = !empty($payment_id) ? 'paid' : 'unpaid';
 
     /* ---------- TRANSACTION ---------- */
@@ -343,14 +379,18 @@ try {
         "INSERT INTO orders
             (order_code, delivery_boy_id, customer_name, customer_mobile,
              apartment_id, apartment_code, apartment_name,
-             division, division_charge, delivery_mode,
+             division, division_charge,
+             tax_amount, tax_rate, tax_type,
+             delivery_mode,
              pickup_branch_id, pickup_branch_name,
              subtotal, total_amount,
              products_json, status, delivery_status, payment_status, payment_ref, paid_at)
          VALUES
             (?, ?, ?, ?,
              ?, ?, ?,
+             ?, ?,
              ?, ?, ?,
+             ?,
              ?, ?,
              ?, ?,
              ?, 'pending', 'disabled', ?, ?, NOW())"
@@ -366,6 +406,9 @@ try {
         $apartmentName,
         $division,
         $divisionCharge,
+        $taxAmount,
+        $taxRate,
+        $taxType,
         $deliveryMode,
         $pickupBranchId > 0 ? $pickupBranchId : null,
         $pickupBranchName !== '' ? $pickupBranchName : null,
@@ -453,6 +496,10 @@ try {
 jsonResponse(true, 'Order placed.', [
     'order_id'         => $orderId,
     'order_code'       => $orderCode,
+    'subtotal'         => $subtotal,
+    'tax_amount'       => $taxAmount,
+    'tax_rate'         => $taxRate,
+    'tax_type'         => $taxType,
     'total'            => $grossTotal,
     'wallet_applied'   => $walletApplied,
     'container_count'  => $totalContainers,

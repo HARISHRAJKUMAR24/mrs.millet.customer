@@ -232,17 +232,42 @@ $discountedSubtotal      = max(0, $cartTotal - $discountAmount);
 $discountedSubtotalRound = (int)round($discountedSubtotal);
 
 /* =========================================================
-   WALLET + PAYABLE
-   IMPORTANT:
-   - Container deposit is NOT part of payable.
-   - Wallet only reduces what's charged at checkout.
-   - Wallet is capped so it never exceeds food+delivery.
+   TAX SETTINGS (from settings)
    ========================================================= */
-$walletBalance      = (float)$customerWalletBalance;
+$taxStatus = (int)($settings['tax_status'] ?? 0);
+$taxRate   = (float)($settings['tax_rate'] ?? 0);
+$taxType   = strtolower($settings['tax_type'] ?? 'exclusive');
+if (!in_array($taxType, ['inclusive', 'exclusive'], true)) $taxType = 'exclusive';
 
-/* Amount wallet will actually reduce (capped to food subtotal) */
-$walletApplied      = min($walletBalance, $discountedSubtotal);
-$payableNow         = max(0, $discountedSubtotal - $walletApplied);
+$taxAmountRound   = 0;
+$foodPlusTax      = $discountedSubtotalRound;
+
+if ($taxStatus === 1 && $taxRate > 0) {
+    if ($taxType === 'inclusive') {
+        $rawTax         = $discountedSubtotalRound - ($discountedSubtotalRound / (1 + ($taxRate / 100)));
+        $taxAmountRound = (int)round($rawTax);
+        $foodPlusTax    = $discountedSubtotalRound;
+    } else {
+        $rawTax         = $discountedSubtotalRound * ($taxRate / 100);
+        $taxAmountRound = (int)round($rawTax);
+        $foodPlusTax    = $discountedSubtotalRound + $taxAmountRound;
+    }
+} else {
+    $taxRate        = 0.0;
+    $taxAmountRound = 0;
+    $foodPlusTax    = $discountedSubtotalRound;
+}
+
+/* =========================================================
+   WALLET + PAYABLE
+   - Container deposit is NOT part of payable.
+   - Wallet only reduces food+tax (never delivery).
+   ========================================================= */
+$walletBalance = (float)$customerWalletBalance;
+
+/* Amount wallet will actually reduce (capped to food+tax) */
+$walletApplied = min($walletBalance, $foodPlusTax);
+$payableNow    = max(0, $foodPlusTax - $walletApplied);
 
 $walletAppliedRound = (int)round($walletApplied);
 $payableNowRound    = (int)round($payableNow);
@@ -488,6 +513,16 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
             display: block;
             margin-top: 2px;
         }
+
+        /* Tax row */
+        .mm-co-row.tax-row {
+            color: #b8893c;
+        }
+
+        .mm-co-row.tax-row span:last-child {
+            color: #b8893c;
+            font-weight: 800;
+        }
     </style>
 </head>
 
@@ -706,6 +741,14 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                             <span id="deliveryCharge">₹0</span>
                         </div>
 
+                        <!-- Tax row (only shown when tax enabled) -->
+                        <div class="mm-co-row tax-row" id="taxRow" style="<?= $taxAmountRound > 0 ? '' : 'display:none;' ?>">
+                            <span id="taxLabel">
+                                Tax<?= ($taxAmountRound > 0 && $taxRate > 0) ? ' (' . (int)$taxRate . '%)' . ($taxType === 'inclusive' ? ' · incl.' : '') : '' ?>
+                            </span>
+                            <span id="taxAmount">₹<?= number_format($taxAmountRound, 0) ?></span>
+                        </div>
+
                         <!-- Container deposit — INFO ONLY, not added to payable -->
                         <div class="mm-co-row container-info" id="containerRow" style="<?= $containerTotalRound > 0 ? '' : 'display:none;' ?>">
                             <span>
@@ -715,7 +758,7 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                                 Container deposit (<span id="containerCount"><?= (int)$totalContainers ?></span>)
                                 <span class="note">Refundable — not added to payable</span>
                             </span>
-                            <span style="color:#b8893c;font-weight:800;">₹<span id="containerAmount"><?= number_format($containerTotalRound, 0) ?></span></span>
+                            <span>₹<span id="containerAmount"><?= number_format($containerTotalRound, 0) ?></span></span>
                         </div>
 
                         <!-- Wallet -->
@@ -737,7 +780,7 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                     </div>
 
                     <!-- Wallet banner -->
-                   <div class="mm-wallet-box" id="walletBox" style="<?= ($customerLoggedIn && $customerWalletBalance > 0) ? '' : 'display:none;' ?>">
+                    <div class="mm-wallet-box" id="walletBox" style="<?= ($customerLoggedIn && $customerWalletBalance > 0) ? '' : 'display:none;' ?>">
                         <div class="left">
                             <div class="mm-wallet-icon">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
@@ -810,6 +853,14 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
         window.PAYABLE_NOW = <?= (int)$payableNowRound ?>;
         window.CONTAINER_TOTAL = <?= (int)$containerTotalRound ?>;
         window.CONTAINER_COUNT = <?= (int)$totalContainers ?>;
+
+        /* Tax settings */
+        window.TAX_SETTINGS = {
+            status: <?= (int)$taxStatus ?>,
+            rate:   <?= (float)$taxRate ?>,
+            type:   "<?= htmlspecialchars($taxType) ?>"
+        };
+        window.TAX_AMOUNT_INITIAL = <?= (int)$taxAmountRound ?>;
     </script>
 
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>

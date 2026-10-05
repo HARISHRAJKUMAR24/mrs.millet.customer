@@ -49,6 +49,11 @@
     const containerAmountEl = document.getElementById("containerAmount");
     const containerCountEl  = document.getElementById("containerCount");
 
+    /* Tax row */
+    const taxRow            = document.getElementById("taxRow");
+    const taxLabelEl        = document.getElementById("taxLabel");
+    const taxAmountEl       = document.getElementById("taxAmount");
+
     let apartmentsCache     = [];
     let divisionsCache      = [];
     let branchesCache       = [];
@@ -62,6 +67,15 @@
     const walletBalance     = Number(window.WALLET_BALANCE || 0);
     const containerTotal    = Number(window.CONTAINER_TOTAL || 0);
     const containerCount    = Number(window.CONTAINER_COUNT || 0);
+
+    /* Tax settings (from PHP) */
+    const TAX = (window.TAX_SETTINGS && typeof window.TAX_SETTINGS === "object")
+        ? {
+            status: Number(window.TAX_SETTINGS.status) || 0,
+            rate:   Number(window.TAX_SETTINGS.rate) || 0,
+            type:   (window.TAX_SETTINGS.type === "inclusive") ? "inclusive" : "exclusive"
+        }
+        : { status: 0, rate: 0, type: "exclusive" };
 
     /* ---------- Helpers ---------- */
     function money(n) {
@@ -86,6 +100,22 @@
     function getCheckedMode() {
         const r = document.querySelector('input[name="delivery_mode"]:checked');
         return r ? r.value : "delivery";
+    }
+
+    /* ---------- TAX ---------- */
+    function calcTax(foodSubtotal) {
+        if (!TAX || Number(TAX.status) !== 1 || Number(TAX.rate) <= 0) {
+            return { amount: 0, rate: 0, type: "exclusive", active: false };
+        }
+        const rate = Number(TAX.rate);
+        const type = (TAX.type === "inclusive") ? "inclusive" : "exclusive";
+        let amount = 0;
+        if (type === "inclusive") {
+            amount = foodSubtotal - (foodSubtotal / (1 + (rate / 100)));
+        } else {
+            amount = foodSubtotal * (rate / 100);
+        }
+        return { amount: Math.round(amount), rate: rate, type: type, active: true };
     }
 
     /* =========================================================
@@ -449,30 +479,53 @@
     }
 
     /* =========================================================
-       TOTALS — container is INFO-ONLY, not part of payable
-       Wallet subtracts live from window.WALLET_BALANCE
+       TOTALS — with tax support
+       Container: info-only, never added.
+       Wallet: subtracts from food+tax (delivery handled by Razorpay)
        ========================================================= */
     function updateTotals() {
-        /* ---- Subtotal ---- */
+        /* Subtotal */
         subTotalEl.textContent = money(subtotal);
 
-        /* ---- Delivery / pickup charge ---- */
+        /* Delivery */
         const mode = getCheckedMode();
         const delivery = (mode === "pickup") ? 0 : Math.round(Number(deliveryCharge || 0));
-
         deliveryEl.textContent = money(delivery);
 
-        /* ---- Food + Delivery = what wallet can reduce ---- */
-        const foodPlusDelivery = subtotal + delivery;
+        /* Tax on food subtotal only */
+        const tax = calcTax(subtotal);
 
-        /* ---- Wallet amount actually applied (capped) ---- */
-        /* walletBalance comes from window.WALLET_BALANCE (PHP echo) */
-        const walletUsable = Math.max(0, Math.min(walletBalance, foodPlusDelivery));
+        /* Tax row visibility */
+        if (taxRow && taxAmountEl && taxLabelEl) {
+            if (tax.active) {
+                taxLabelEl.textContent = "Tax (" + tax.rate + "%)" +
+                    (tax.type === "inclusive" ? " · incl." : "");
+                taxAmountEl.textContent = money(tax.amount);
+                taxRow.style.display = "flex";
+            } else {
+                taxRow.style.display = "none";
+            }
+        }
 
-        /* ---- Final payable = food + delivery − wallet ---- */
+        /* Food + tax + delivery = grand base */
+        let foodPlusDelivery;
+        if (tax.active && tax.type === "exclusive") {
+            foodPlusDelivery = subtotal + tax.amount + delivery;
+        } else {
+            foodPlusDelivery = subtotal + delivery;
+        }
+
+        /* Wallet can only reduce the food+tax portion (not delivery) */
+        const foodPortion = (tax.active && tax.type === "exclusive")
+            ? subtotal + tax.amount
+            : subtotal;
+
+        const walletUsable = Math.max(0, Math.min(walletBalance, foodPortion));
+
+        /* Final payable = food + tax + delivery − wallet */
         const payable = Math.max(0, foodPlusDelivery - walletUsable);
 
-        /* ---- Wallet row ---- */
+        /* Wallet row */
         if (walletRow) {
             if (walletUsable > 0) {
                 walletRow.style.display = "flex";
@@ -482,16 +535,12 @@
             }
         }
 
-        /* ---- Container row (info only) ---- */
+        /* Container row (info only) */
         if (containerRow) {
-            if (containerTotal > 0) {
-                containerRow.style.display = "flex";
-            } else {
-                containerRow.style.display = "none";
-            }
+            containerRow.style.display = (containerTotal > 0) ? "flex" : "none";
         }
 
-        /* ---- Wallet message in banner ---- */
+        /* Wallet message */
         if (walletMsg) {
             if (walletBalance > 0 && walletUsable > 0) {
                 walletMsg.classList.remove("warn");
@@ -505,7 +554,7 @@
             }
         }
 
-        /* ---- Grand total ---- */
+        /* Grand total */
         grandTotalEl.textContent = money(payable);
 
         if (payNowText) {
@@ -556,10 +605,22 @@
             pickupBranchName = opt ? (opt.dataset.name || opt.textContent.trim()) : "";
         }
 
-        /* Payable = food + delivery − wallet (container NOT included) */
+        /* Tax + totals */
         const delivery = (mode === "pickup") ? 0 : Math.round(Number(deliveryCharge || 0));
-        const foodPlusDelivery = subtotal + delivery;
-        const walletUsable = Math.max(0, Math.min(walletBalance, foodPlusDelivery));
+        const tax = calcTax(subtotal);
+
+        let foodPlusDelivery;
+        if (tax.active && tax.type === "exclusive") {
+            foodPlusDelivery = subtotal + tax.amount + delivery;
+        } else {
+            foodPlusDelivery = subtotal + delivery;
+        }
+
+        const foodPortion = (tax.active && tax.type === "exclusive")
+            ? subtotal + tax.amount
+            : subtotal;
+
+        const walletUsable = Math.max(0, Math.min(walletBalance, foodPortion));
         const payable      = Math.max(0, foodPlusDelivery - walletUsable);
 
         const orderPayload = {
