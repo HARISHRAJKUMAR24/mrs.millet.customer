@@ -210,3 +210,76 @@ if (!function_exists('jsonResponse')) {
         exit;
     }
 }
+
+
+/* ---------- AUTO-CLEAN EXPIRED MENU CART ITEMS ---------- */
+if (!function_exists('cleanExpiredMenuCart')) {
+    /**
+     * Removes cart rows whose menu_code no longer matches an active menu.
+     * Runs on every page load — cheap and safe.
+     *
+     * @param PDO $pdo
+     * @return int  Number of items removed
+     */
+    function cleanExpiredMenuCart($pdo)
+    {
+        $customerId = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0
+            ? (int)$_SESSION['customer_id']
+            : 0;
+
+        /* Get currently active menu code (or null) */
+        $activeMenu = getActiveMenu($pdo);
+        $activeCode = $activeMenu ? $activeMenu['menu_code'] : null;
+
+        $removed = 0;
+
+        try {
+            if ($customerId > 0) {
+                /* --- DB cart --- */
+                if ($activeCode === null) {
+                    /* No active menu at all → clear entire cart */
+                    $stmt = $pdo->prepare("DELETE FROM customer_cart WHERE customer_id = ?");
+                    $stmt->execute([$customerId]);
+                    $removed = $stmt->rowCount();
+                } else {
+                    /* Remove rows whose menu_code is NULL or not equal to active code */
+                    $stmt = $pdo->prepare(
+                        "DELETE FROM customer_cart
+                         WHERE customer_id = ?
+                           AND (menu_code IS NULL OR menu_code <> ?)"
+                    );
+                    $stmt->execute([$customerId, $activeCode]);
+                    $removed = $stmt->rowCount();
+                }
+            } else {
+                /* --- Session cart --- */
+                if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
+                    foreach ($_SESSION['cart'] as $key => $item) {
+                        $itemMenu = $item['menu_code'] ?? null;
+
+                        if ($activeCode === null || $itemMenu === null || $itemMenu !== $activeCode) {
+                            unset($_SESSION['cart'][$key]);
+                            $removed++;
+                        }
+                    }
+                    /* Re-index */
+                    $_SESSION['cart'] = array_values($_SESSION['cart']);
+                    /* Rebuild keyed array for guest cart (keys p{id}_v{vid}) */
+                    $rebuilt = [];
+                    foreach ($_SESSION['cart'] as $it) {
+                        $k = 'p' . (int)($it['product_id'] ?? 0) . '_v' . (int)($it['variant_id'] ?? 0);
+                        $rebuilt[$k] = $it;
+                    }
+                    $_SESSION['cart'] = $rebuilt;
+                }
+            }
+        } catch (PDOException $e) {
+            /* silent */
+        }
+
+        return $removed;
+    }
+}
+
+
+cleanExpiredMenuCart($pdo);
