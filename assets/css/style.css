@@ -27,6 +27,7 @@ body {
     color: #302923;
     line-height: 1.5;
     -webkit-tap-highlight-color: transparent;
+    padding-bottom: 40px;
 
 }
 
@@ -84,7 +85,7 @@ button {
 
 .mm-nav-inner {
     height: 64px;
-    display: flex; 
+    display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 16px;
@@ -1157,7 +1158,7 @@ button {
     font-size: 11px;
     color: #948c82;
 }
-  
+
 .mm-co-dd-empty {
     padding: 14px;
     font-size: 12.5px;

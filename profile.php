@@ -165,15 +165,25 @@ try {
 } catch (PDOException $e) {}
 
 /* =========================================================
-   RECENT ORDERS
+   RECENT ORDERS (with delivery boy)
    ========================================================= */
 $recentOrders = [];
 try {
     $stmt = $pdo->prepare(
-        "SELECT order_code, total_amount, status, payment_status, created_at
-         FROM orders
-         WHERE customer_mobile = ?
-         ORDER BY id DESC
+        "SELECT o.order_code,
+                o.total_amount,
+                o.status,
+                o.payment_status,
+                o.delivery_status,
+                o.delivery_mode,
+                o.created_at,
+                o.delivery_boy_id,
+                b.full_name     AS delivery_boy_name,
+                b.delivery_code AS delivery_boy_code
+         FROM orders o
+         LEFT JOIN delivery_boys b ON b.id = o.delivery_boy_id
+         WHERE o.customer_mobile = ?
+         ORDER BY o.id DESC
          LIMIT 10"
     );
     $stmt->execute([$customerMobile]);
@@ -629,7 +639,7 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             width: 100%;
             border-collapse: collapse;
             font-family: "DM Sans", sans-serif;
-            min-width: 600px;
+            min-width: 760px;
         }
 
         .pf-table thead th {
@@ -708,6 +718,59 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             display: inline-block;
             vertical-align: middle;
         }
+
+        /* ---------- DELIVERY BOY CELL ---------- */
+        .pf-dboy {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        .pf-dboy-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #b51f2c 0%, #8e1722 100%);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 800;
+            flex-shrink: 0;
+        }
+
+        .pf-dboy-info { min-width: 0; }
+
+        .pf-dboy-name {
+            font-size: 12px;
+            font-weight: 700;
+            color: #302923;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 140px;
+        }
+
+        .pf-dboy-code {
+            font-size: 9.5px;
+            color: #948c82;
+            font-weight: 600;
+            margin-top: 1px;
+        }
+
+        .pf-dboy-empty,
+        .pf-dboy-pickup {
+            font-size: 11.5px;
+            color: #948c82;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .pf-dboy-pickup { color: #a35a0e; }
 
         /* ---------- EMPTY ---------- */
         .pf-empty {
@@ -833,8 +896,8 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             gap: 10px;
             padding: 13px 18px;
             border-radius: 12px;
-            background: #148200;
-            color: #ffffff;
+            background: #fff;
+            color: #302923;
             border: 1.5px solid #ece5da;
             border-left: 4px solid #1b5e20;
             font-family: "DM Sans", sans-serif;
@@ -880,7 +943,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             color: #b51f2c;
         }
 
-        /* On mobile — keep top-right, full width, slide from right */
         @media (max-width: 640px) {
             #mmToast {
                 top: 16px;
@@ -1103,12 +1165,16 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                                             <th>Amount</th>
                                             <th>Status</th>
                                             <th>Payment</th>
+                                            <th>Delivered By</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         <?php foreach ($recentOrders as $o):
-                                            $s = strtolower($o['status']);
-                                            $p = strtolower($o['payment_status']);
+                                            $s       = strtolower($o['status']);
+                                            $p       = strtolower($o['payment_status']);
+                                            $mode    = strtolower($o['delivery_mode'] ?? 'delivery');
+                                            $boyName = trim($o['delivery_boy_name'] ?? '');
+                                            $boyCode = trim($o['delivery_boy_code'] ?? '');
                                         ?>
                                             <tr>
                                                 <td><strong>#<?= htmlspecialchars($o['order_code']) ?></strong></td>
@@ -1123,6 +1189,29 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                                                     <span class="pf-badge <?= $p === 'paid' ? 'received' : 'pending' ?>">
                                                         <?= htmlspecialchars(ucfirst($p)) ?>
                                                     </span>
+                                                </td>
+                                                <td>
+                                                    <?php if ($mode === 'pickup'): ?>
+                                                        <span class="pf-dboy-pickup">
+                                                            <i class="bi bi-shop"></i> Store Pickup
+                                                        </span>
+                                                    <?php elseif ($boyName !== ''): ?>
+                                                        <div class="pf-dboy">
+                                                            <div class="pf-dboy-avatar">
+                                                                <?= htmlspecialchars(strtoupper(substr($boyName, 0, 1))) ?>
+                                                            </div>
+                                                            <div class="pf-dboy-info">
+                                                                <div class="pf-dboy-name"><?= htmlspecialchars($boyName) ?></div>
+                                                                <?php if ($boyCode !== ''): ?>
+                                                                    <div class="pf-dboy-code">#<?= htmlspecialchars($boyCode) ?></div>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        </div>
+                                                    <?php else: ?>
+                                                        <span class="pf-dboy-empty">
+                                                            <i class="bi bi-dash-circle"></i> Not assigned
+                                                        </span>
+                                                    <?php endif; ?>
                                                 </td>
                                             </tr>
                                         <?php endforeach; ?>
@@ -1394,7 +1483,7 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
 
     <div id="mmToast"></div>
 
-    <?php include_once './includes/footer.php'; ?> 
+    <?php include_once './includes/footer.php'; ?>
     <script>
         window.MAIN_URL = "<?= MAIN_URL ?>";
         window.ADMIN_URL = "<?= ADMIN_URL ?>";

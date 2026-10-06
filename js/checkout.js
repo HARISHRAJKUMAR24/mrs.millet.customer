@@ -1,6 +1,8 @@
 /* =========================================================
    MRS MILL@ — CHECKOUT PAGE
    File: ./js/checkout.js
+   Container deposit is hidden from the summary but
+   still sent to the backend when placing the order.
    ========================================================= */
 
 (function () {
@@ -45,10 +47,6 @@
     const walletBalanceEl   = document.getElementById("walletBalance");
     const walletMsg         = document.getElementById("walletMsg");
 
-    const containerRow      = document.getElementById("containerRow");
-    const containerAmountEl = document.getElementById("containerAmount");
-    const containerCountEl  = document.getElementById("containerCount");
-
     /* Tax row */
     const taxRow            = document.getElementById("taxRow");
     const taxLabelEl        = document.getElementById("taxLabel");
@@ -63,10 +61,11 @@
     let deliveryCharge      = 0;
     let currentMode         = "delivery";
 
-    /* Wallet + container (from PHP) */
+    /* Wallet (from PHP) */
     const walletBalance     = Number(window.WALLET_BALANCE || 0);
+
+    /* Container — used only when sending order to backend */
     const containerTotal    = Number(window.CONTAINER_TOTAL || 0);
-    const containerCount    = Number(window.CONTAINER_COUNT || 0);
 
     /* Tax settings (from PHP) */
     const TAX = (window.TAX_SETTINGS && typeof window.TAX_SETTINGS === "object")
@@ -480,8 +479,7 @@
 
     /* =========================================================
        TOTALS — with tax support
-       Container: info-only, never added.
-       Wallet: subtracts from food+tax (delivery handled by Razorpay)
+       Container deposit is NOT shown on checkout.
        ========================================================= */
     function updateTotals() {
         /* Subtotal */
@@ -495,7 +493,7 @@
         /* Tax on food subtotal only */
         const tax = calcTax(subtotal);
 
-        /* Tax row visibility */
+        /* Tax row visibility — works for both inclusive and exclusive */
         if (taxRow && taxAmountEl && taxLabelEl) {
             if (tax.active) {
                 taxLabelEl.textContent = "Tax (" + tax.rate + "%)" +
@@ -533,11 +531,6 @@
             } else {
                 walletRow.style.display = "none";
             }
-        }
-
-        /* Container row (info only) */
-        if (containerRow) {
-            containerRow.style.display = (containerTotal > 0) ? "flex" : "none";
         }
 
         /* Wallet message */

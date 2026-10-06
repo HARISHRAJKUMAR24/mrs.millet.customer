@@ -7,6 +7,7 @@ $settings = getSettings($pdo);
 $siteName = $settings['username'] ?? 'Mrs Mill@';
 $logoUrl  = !empty($settings['logo_image'])    ? ADMIN_URL . $settings['logo_image']    : '';
 $favicon  = !empty($settings['favicon_image']) ? ADMIN_URL . $settings['favicon_image'] : '';
+
 /* =========================================================
    AUTH — must be logged in
    ========================================================= */
@@ -39,7 +40,7 @@ if ($filter !== 'all') {
 }
 
 /* =========================================================
-   LOAD ORDERS
+   LOAD ORDERS (with delivery boy)
    ========================================================= */
 $orders = [];
 $totalOrders = 0;
@@ -58,17 +59,21 @@ try {
     if ($page > $totalPages) $page = $totalPages;
     $offset = ($page - 1) * $perPage;
 
-    /* Load orders */
+    /* Load orders with delivery boy */
     $stmt = $pdo->prepare(
-        "SELECT id, order_code, customer_name, customer_mobile,
-                apartment_name, division, delivery_mode,
-                pickup_branch_name,
-                subtotal, division_charge, tax_amount, tax_rate, tax_type,
-                total_amount, products_json, status, delivery_status,
-                payment_status, created_at
-         FROM orders
-         WHERE customer_mobile = ? $filterWhere
-         ORDER BY id DESC
+        "SELECT o.id, o.order_code, o.customer_name, o.customer_mobile,
+                o.apartment_name, o.division, o.delivery_mode,
+                o.pickup_branch_name,
+                o.subtotal, o.division_charge, o.tax_amount, o.tax_rate, o.tax_type,
+                o.total_amount, o.products_json, o.status, o.delivery_status,
+                o.payment_status, o.created_at,
+                o.delivery_boy_id,
+                b.full_name     AS delivery_boy_name,
+                b.delivery_code AS delivery_boy_code
+         FROM orders o
+         LEFT JOIN delivery_boys b ON b.id = o.delivery_boy_id
+         WHERE o.customer_mobile = ? $filterWhere
+         ORDER BY o.id DESC
          LIMIT $perPage OFFSET $offset"
     );
     $stmt->execute([$customerMobile]);
@@ -136,7 +141,6 @@ function statusMeta($status, $paymentStatus = '')
     $status = strtolower($status);
     $paymentStatus = strtolower($paymentStatus);
 
-    /* Cancelled overrides everything */
     if ($status === 'cancelled') {
         return [
             'label' => 'Cancelled',
@@ -145,7 +149,6 @@ function statusMeta($status, $paymentStatus = '')
         ];
     }
 
-    /* Delivered */
     if ($status === 'delivered') {
         return [
             'label' => 'Delivered',
@@ -154,7 +157,6 @@ function statusMeta($status, $paymentStatus = '')
         ];
     }
 
-    /* Processing / Confirmed */
     if ($status === 'processing' || $status === 'confirmed') {
         return [
             'label' => 'Confirmed',
@@ -163,7 +165,6 @@ function statusMeta($status, $paymentStatus = '')
         ];
     }
 
-    /* Pending */
     return [
         'label' => 'Pending',
         'class' => 'pending',
@@ -553,6 +554,71 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             font-size: 13px;
         }
 
+        /* ---------- DELIVERY BOY CHIP ---------- */
+        .mo-dboy {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 10px 5px 6px;
+            border-radius: 999px;
+            background: #fdf1e2;
+            border: 1px solid #f3dca5;
+        }
+
+        .mo-dboy-avatar {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #b51f2c 0%, #8e1722 100%);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-weight: 800;
+            flex-shrink: 0;
+        }
+
+        .mo-dboy-name {
+            font-size: 11.5px;
+            font-weight: 800;
+            color: #a35a0e;
+            white-space: nowrap;
+        }
+
+        .mo-dboy-code {
+            font-size: 9.5px;
+            color: #b8893c;
+            font-weight: 700;
+            margin-left: 2px;
+        }
+
+        .mo-dboy-pickup {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 11px;
+            border-radius: 999px;
+            background: #fdf1e2;
+            color: #a35a0e;
+            font-size: 11.5px;
+            font-weight: 800;
+            border: 1px solid #f3dca5;
+        }
+
+        .mo-dboy-empty {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 11px;
+            border-radius: 999px;
+            background: #f7f2ec;
+            color: #948c82;
+            font-size: 11.5px;
+            font-weight: 800;
+            border: 1px solid #e4ddd3;
+        }
+
         .mo-total-line {
             display: flex;
             align-items: baseline;
@@ -757,10 +823,14 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                     <div class="mo-list">
 
                         <?php foreach ($orders as $o):
-                            $status = statusMeta($o['status'], $o['payment_status']);
-                            $pay    = paymentMeta($o['payment_status']);
-                            $items  = json_decode($o['products_json'] ?? '[]', true);
+                            $status  = statusMeta($o['status'], $o['payment_status']);
+                            $pay     = paymentMeta($o['payment_status']);
+                            $items   = json_decode($o['products_json'] ?? '[]', true);
                             if (!is_array($items)) $items = [];
+
+                            $mode    = strtolower($o['delivery_mode'] ?? 'delivery');
+                            $boyName = trim($o['delivery_boy_name'] ?? '');
+                            $boyCode = trim($o['delivery_boy_code'] ?? '');
                         ?>
                             <div class="mo-order">
 
@@ -809,9 +879,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                                                             · <?= htmlspecialchars($it['variant_qty']) ?>
                                                         <?php endif; ?>
                                                         · Qty <?= (int)($it['qty'] ?? 1) ?>
-                                                        <?php if (!empty($it['container_enabled']) && (int)$it['container_enabled'] === 1): ?>
-                                                            · <span style="color:#b8893c;font-weight:800;">+Container ₹<?= number_format((float)($it['container_price'] ?? 0), 0) ?></span>
-                                                        <?php endif; ?>
                                                     </p>
                                                 </div>
                                                 <div class="mo-item-price">
@@ -832,7 +899,7 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                                 <div class="mo-order-foot">
 
                                     <div class="mo-meta">
-                                        <?php if (($o['delivery_mode'] ?? 'delivery') === 'pickup'): ?>
+                                        <?php if ($mode === 'pickup'): ?>
                                             <span>
                                                 <i class="bi bi-shop"></i>
                                                 Pickup<?= !empty($o['pickup_branch_name']) ? ' · ' . htmlspecialchars($o['pickup_branch_name']) : '' ?>
@@ -844,6 +911,28 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                                                 <?php if (!empty($o['division'])): ?>
                                                     · Div <?= htmlspecialchars($o['division']) ?>
                                                 <?php endif; ?>
+                                            </span>
+                                        <?php endif; ?>
+
+                                        <?php if ($mode === 'pickup'): ?>
+                                            <span class="mo-dboy-pickup">
+                                                <i class="bi bi-shop"></i> Store Pickup
+                                            </span>
+                                        <?php elseif ($boyName !== ''): ?>
+                                            <span class="mo-dboy">
+                                                <span class="mo-dboy-avatar">
+                                                    <?= htmlspecialchars(strtoupper(substr($boyName, 0, 1))) ?>
+                                                </span>
+                                                <span class="mo-dboy-name">
+                                                    <?= htmlspecialchars($boyName) ?>
+                                                    <?php if ($boyCode !== ''): ?>
+                                                        <span class="mo-dboy-code">#<?= htmlspecialchars($boyCode) ?></span>
+                                                    <?php endif; ?>
+                                                </span>
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="mo-dboy-empty">
+                                                <i class="bi bi-dash-circle"></i> Not assigned
                                             </span>
                                         <?php endif; ?>
                                     </div>
@@ -916,7 +1005,7 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
     <?php include_once './includes/register-poup.php'; ?>
 
     <div id="mmToast"></div>
-    <?php include_once './includes/footer.php'; ?> 
+    <?php include_once './includes/footer.php'; ?>
     <script>
         window.MAIN_URL = "<?= MAIN_URL ?>";
         window.ADMIN_URL = "<?= ADMIN_URL ?>";

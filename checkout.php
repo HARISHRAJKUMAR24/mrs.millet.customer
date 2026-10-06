@@ -123,7 +123,8 @@ if ($cartCount <= 0) {
 }
 
 /* =========================================================
-   CONTAINER DEPOSIT (info only — NOT added to payable)
+   CONTAINER DEPOSIT — computed but NOT DISPLAYED on checkout.
+   Still sent to backend when placing the order.
    ========================================================= */
 $containerTotal  = 0;
 $totalContainers = 0;
@@ -223,7 +224,6 @@ if ($currentDiscount && $currentDiscount['amount'] > 0) {
     }
 }
 
-/* ---------- SAFE DEFAULTS ---------- */
 $discountAmount          = (float)($discountAmount ?? 0);
 $discountLabel           = (string)($discountLabel ?? '');
 $discountAmountRound     = (int)round($discountAmount);
@@ -232,15 +232,15 @@ $discountedSubtotal      = max(0, $cartTotal - $discountAmount);
 $discountedSubtotalRound = (int)round($discountedSubtotal);
 
 /* =========================================================
-   TAX SETTINGS (from settings)
+   TAX SETTINGS
    ========================================================= */
 $taxStatus = (int)($settings['tax_status'] ?? 0);
 $taxRate   = (float)($settings['tax_rate'] ?? 0);
 $taxType   = strtolower($settings['tax_type'] ?? 'exclusive');
 if (!in_array($taxType, ['inclusive', 'exclusive'], true)) $taxType = 'exclusive';
 
-$taxAmountRound   = 0;
-$foodPlusTax      = $discountedSubtotalRound;
+$taxAmountRound = 0;
+$foodPlusTax    = $discountedSubtotalRound;
 
 if ($taxStatus === 1 && $taxRate > 0) {
     if ($taxType === 'inclusive') {
@@ -260,14 +260,10 @@ if ($taxStatus === 1 && $taxRate > 0) {
 
 /* =========================================================
    WALLET + PAYABLE
-   - Container deposit is NOT part of payable.
-   - Wallet only reduces food+tax (never delivery).
    ========================================================= */
-$walletBalance = (float)$customerWalletBalance;
-
-/* Amount wallet will actually reduce (capped to food+tax) */
-$walletApplied = min($walletBalance, $foodPlusTax);
-$payableNow    = max(0, $foodPlusTax - $walletApplied);
+$walletBalance      = (float)$customerWalletBalance;
+$walletApplied      = min($walletBalance, $foodPlusTax);
+$payableNow         = max(0, $foodPlusTax - $walletApplied);
 
 $walletAppliedRound = (int)round($walletApplied);
 $payableNowRound    = (int)round($payableNow);
@@ -500,20 +496,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
             color: #a35a0e;
         }
 
-        /* Container info row */
-        .mm-co-row.container-info {
-            color: #b8893c;
-            font-weight: 700;
-        }
-
-        .mm-co-row.container-info .note {
-            font-size: 10px;
-            color: #948c82;
-            font-weight: 600;
-            display: block;
-            margin-top: 2px;
-        }
-
         /* Tax row */
         .mm-co-row.tax-row {
             color: #b8893c;
@@ -532,8 +514,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
 
     <main class="mm-main">
         <div class="mm-container">
-
-           
 
             <section class="mm-co-wrap">
 
@@ -699,9 +679,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                                             · <?= htmlspecialchars($item['variant_qty']) ?>
                                         <?php endif; ?>
                                         · Qty <?= (int)$item['qty'] ?>
-                                        <?php if ((int)$item['container_enabled'] === 1): ?>
-                                            · <span style="color:#b8893c;font-weight:800;">+ Container ₹<?= number_format((float)$item['container_price'], 0) ?></span>
-                                        <?php endif; ?>
                                     </p>
                                 </div>
                                 <div class="mm-co-item-price">
@@ -735,28 +712,14 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                             <span id="deliveryCharge">₹0</span>
                         </div>
 
-                        <!-- Tax row (only shown when tax enabled) -->
-                        <div class="mm-co-row tax-row" id="taxRow" style="<?= $taxAmountRound > 0 ? '' : 'display:none;' ?>">
-                            <span id="taxLabel">
-                                Tax<?= ($taxAmountRound > 0 && $taxRate > 0) ? ' (' . (int)$taxRate . '%)' . ($taxType === 'inclusive' ? ' · incl.' : '') : '' ?>
-                            </span>
-                            <span id="taxAmount">₹<?= number_format($taxAmountRound, 0) ?></span>
-                        </div>
-
-                        <!-- Container deposit — INFO ONLY, not added to payable -->
-                        <div class="mm-co-row container-info" id="containerRow" style="<?= $containerTotalRound > 0 ? '' : 'display:none;' ?>">
-                            <span>
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" style="vertical-align:-2px;margin-right:4px;">
-                                    <path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-                                </svg>
-                                Container deposit (<span id="containerCount"><?= (int)$totalContainers ?></span>)
-                                <span class="note">Refundable — not added to payable</span>
-                            </span>
-                            <span>₹<span id="containerAmount"><?= number_format($containerTotalRound, 0) ?></span></span>
+                        <!-- Tax row — always rendered, JS controls visibility -->
+                        <div class="mm-co-row tax-row" id="taxRow" style="display:none;">
+                            <span id="taxLabel">Tax</span>
+                            <span id="taxAmount">₹0</span>
                         </div>
 
                         <!-- Wallet -->
-                        <div class="mm-co-row" id="walletRow" style="<?= $walletAppliedRound > 0 ? '' : 'display:none;' ?>color:#1f7a3d;">
+                        <div class="mm-co-row" id="walletRow" style="display:none;color:#1f7a3d;">
                             <span>
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" style="vertical-align:-2px;margin-right:4px;">
                                     <rect x="2" y="6" width="20" height="14" rx="2" />
@@ -764,7 +727,7 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                                 </svg>
                                 Wallet applied
                             </span>
-                            <span style="color:#1f7a3d;font-weight:800;">−₹<span id="walletApplied"><?= number_format($walletAppliedRound, 0) ?></span></span>
+                            <span style="color:#1f7a3d;font-weight:800;">−₹<span id="walletApplied">0</span></span>
                         </div>
 
                         <div class="mm-co-row mm-co-total">
@@ -822,7 +785,9 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
     <?php include_once './includes/register-poup.php'; ?>
 
     <div id="mmToast"></div>
-    <?php include_once './includes/footer.php'; ?> 
+
+    <?php include_once './includes/footer.php'; ?>
+
     <script>
         window.MAIN_URL = "<?= MAIN_URL ?>";
         window.ADMIN_URL = "<?= ADMIN_URL ?>";
@@ -845,6 +810,8 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
         window.WALLET_BALANCE = <?= (float)$customerWalletBalance ?>;
         window.WALLET_APPLIED = <?= (int)$walletAppliedRound ?>;
         window.PAYABLE_NOW = <?= (int)$payableNowRound ?>;
+
+        /* Container amount is sent to backend but NOT shown on checkout */
         window.CONTAINER_TOTAL = <?= (int)$containerTotalRound ?>;
         window.CONTAINER_COUNT = <?= (int)$totalContainers ?>;
 
