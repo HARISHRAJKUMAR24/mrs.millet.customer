@@ -25,6 +25,7 @@
     const regMobile         = document.getElementById("regMobile");
     const regName           = document.getElementById("regName");
     const regPassword       = document.getElementById("regPassword");
+    const regPasswordField  = document.getElementById("regPasswordField");
     const regAptSearch      = document.getElementById("regApartmentSearch");
     const regAptList        = document.getElementById("regApartmentList");
     const regAptId          = document.getElementById("regApartmentId");
@@ -55,7 +56,7 @@
         apartmentsCache: [],
         lookupTimer: null,
         lastLookedMobile: "",
-        customApartment: false   /* true when user typed an apartment not in the list */
+        customApartment: false
     };
 
     /* ---------- HELPERS ---------- */
@@ -367,6 +368,7 @@
         if (regMobile) regMobile.value = mobile || "";
         if (regName) regName.value = (customerData && customerData.name) ? customerData.name : "";
         if (regPassword) regPassword.value = "";
+        if (regPasswordField) regPasswordField.style.display = "none";
         if (regAptList) regAptList.style.display = "none";
         if (regAptHint) regAptHint.textContent = "";
 
@@ -481,8 +483,10 @@
 
         const divs = Array.isArray(apt.divisions) ? apt.divisions : [];
 
-        /* Known apartment → show SELECT dropdown */
+        /* Known apartment → show SELECT dropdown + show password field */
         state.customApartment = false;
+        if (regPasswordField) regPasswordField.style.display = "";
+
         if (regDivisionText) {
             regDivisionText.value = "";
             regDivisionText.style.display = "none";
@@ -531,6 +535,10 @@
         if (regDivisionHint) {
             regDivisionHint.textContent = "Type your division (e.g. 4, Block B, Tower 2).";
         }
+
+        /* Custom apartment → hide password (no login) */
+        if (regPasswordField) regPasswordField.style.display = "none";
+        if (regPassword) regPassword.value = "";
     }
 
     if (regAptSearch) {
@@ -572,6 +580,10 @@
                     regDivisionText.style.display = "none";
                 }
                 if (regDivisionHint) regDivisionHint.textContent = "";
+
+                /* No apartment chosen → hide password */
+                if (regPasswordField) regPasswordField.style.display = "none";
+                if (regPassword) regPassword.value = "";
             }
 
             renderRegAptList(this.value);
@@ -644,7 +656,6 @@
                 : "";
 
             if (name.length < 3) { showToast("Please enter your name (3+ chars).", "error"); regName.focus(); return; }
-            if (password.length < 3) { showToast("Password must be 3+ characters.", "error"); regPassword.focus(); return; }
             if (aptText === "") { showToast("Please enter your apartment.", "error"); regAptSearch.focus(); return; }
 
             /* Determine mode */
@@ -662,6 +673,13 @@
                 if (division === "") {
                     showToast("Please select a division.", "error");
                     regDivision.focus();
+                    return;
+                }
+
+                /* Known apartment → password required */
+                if (password.length < 3) {
+                    showToast("Password must be 3+ characters.", "error");
+                    regPassword.focus();
                     return;
                 }
             }

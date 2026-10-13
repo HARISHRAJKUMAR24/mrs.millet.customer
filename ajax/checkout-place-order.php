@@ -1,8 +1,8 @@
 <?php
 /* =========================================================
    MRS MILL@ — PLACE ORDER
-   Container deposit is stored separately — NOT added to
-   orders.total_amount. GST is applied to subtotal only.
+   Wallet can cover food + tax + delivery.
+   Container deposit is tracked but NOT added to total_amount.
    ========================================================= */
 
 require_once __DIR__ . '/../config/config.php';
@@ -251,13 +251,8 @@ try {
     }
 
     /* =========================================================
-       APPLY TAX (from settings)
-       - Exclusive : tax = subtotal × rate%   (added on top)
-       - Inclusive : tax inside subtotal      (back-calculated)
-       - Delivery charge is NOT taxed
-       - Container deposit is NOT taxed
-       - Rounded to whole rupee
-    ========================================================= */
+       APPLY TAX
+       ========================================================= */
     $settings  = getSettings($pdo);
     $taxStatus = (int)($settings['tax_status'] ?? 0);
     $taxRate   = (float)($settings['tax_rate'] ?? 0);
@@ -267,9 +262,9 @@ try {
         $taxType = 'exclusive';
     }
 
-    $taxAmount           = 0.0;
-    $deliveryPortion     = ($deliveryMode === 'delivery') ? $divisionCharge : 0;
-    $foodPlusDelivery    = 0.0;
+    $taxAmount        = 0.0;
+    $deliveryPortion  = ($deliveryMode === 'delivery') ? $divisionCharge : 0;
+    $foodPlusDelivery = 0.0;
 
     if ($taxStatus === 1 && $taxRate > 0) {
         if ($taxType === 'inclusive') {
@@ -287,13 +282,12 @@ try {
         $foodPlusDelivery = $subtotal + $deliveryPortion;
     }
 
-    /* Round to whole rupee */
     $foodPlusDelivery = round($foodPlusDelivery);
+    $grossTotal       = $foodPlusDelivery;
 
-    /* Order total = food + delivery + tax (container NOT included) */
-    $grossTotal = $foodPlusDelivery;
-
-    /* ---------- Wallet ---------- */
+    /* =========================================================
+       WALLET — can cover entire bill (food + tax + delivery)
+       ========================================================= */
     if ($customerId > 0) {
         $wStmt = $pdo->prepare(
             "SELECT wallet_balance FROM customers WHERE id = ? LIMIT 1 FOR UPDATE"
@@ -301,6 +295,7 @@ try {
         $wStmt->execute([$customerId]);
         $walletBalance = (float)$wStmt->fetchColumn();
 
+        /* Cap by requested, balance, and the entire bill */
         $walletApplied = min($walletRequested, $walletBalance, $foodPlusDelivery);
         if ($walletApplied < 0) $walletApplied = 0;
 
@@ -458,7 +453,7 @@ try {
         }
     }
 
-    /* Insert container row (if any) */
+    /* Insert container row */
     if ($totalContainers > 0) {
         try {
             $cIns = $pdo->prepare(

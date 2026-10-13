@@ -2,14 +2,6 @@
 /* =========================================================
    MRS MILL@ — CUSTOMER REGISTER
    File: ./ajax/customer-register.php
-
-   Two modes:
-   1) Normal : apartment_id + division
-               → creates/updates customer, logs in
-   2) Custom : custom_apartment + custom_division
-               → checks duplicate by mobile
-               → saves ONE row in customer_address_requests
-               → does NOT create customer, does NOT log in
    ========================================================= */
 
 require_once __DIR__ . '/../config/config.php';
@@ -40,16 +32,18 @@ if ($name === '' || mb_strlen($name) < 3) {
 if (!preg_match('/^[0-9]{10,15}$/', $mobile)) {
     jsonResponse(false, 'Mobile number must be 10–15 digits.');
 }
-if (strlen($password) < 3) {
-    jsonResponse(false, 'Password must be at least 3 characters.');
-}
 
 $isCustom = ($customApartment !== '');
 
 if (!$isCustom) {
+    /* Normal mode requires password + apartment + division */
+    if (strlen($password) < 3) {
+        jsonResponse(false, 'Password must be at least 3 characters.');
+    }
     if ($apartmentId <= 0) jsonResponse(false, 'Please select an apartment.');
     if ($division === '')  jsonResponse(false, 'Please select a division.');
 } else {
+    /* Custom request mode requires only typed division */
     if ($customDivision === '') jsonResponse(false, 'Please type your division.');
 }
 
@@ -71,11 +65,10 @@ try {
         $existing = $chk->fetch(PDO::FETCH_ASSOC);
 
         if ($existing) {
-            /* Already has a pending request → do NOT insert again */
             jsonResponse(true, 'You have already sent a request. Our team will contact you soon.', [
-                'request_only'      => true,
-                'already_requested' => true,
-                'request_id'        => (int)$existing['id'],
+                'request_only'        => true,
+                'already_requested'   => true,
+                'request_id'          => (int)$existing['id'],
                 'requested_apartment' => $existing['requested_apartment'],
                 'requested_division'  => $existing['requested_division']
             ]);
@@ -97,7 +90,7 @@ try {
     }
 
     /* =========================================================
-       NORMAL MODE — existing behaviour
+       NORMAL MODE
        ========================================================= */
     $aStmt = $pdo->prepare(
         "SELECT id, apartment_code, apartment_name, divisions

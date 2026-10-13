@@ -1,8 +1,7 @@
 /* =========================================================
    MRS MILL@ — CHECKOUT PAGE
    File: ./js/checkout.js
-   Container deposit is hidden from the summary but
-   still sent to the backend when placing the order.
+   Wallet can cover the entire bill (food + tax + delivery).
    ========================================================= */
 
 (function () {
@@ -12,67 +11,67 @@
     const IS_LOGGED_IN = !!window.IS_LOGGED_IN;
 
     /* ---------- DOM ---------- */
-    const mobileInput       = document.getElementById("coMobile");
-    const nameInput         = document.getElementById("coName");
+    const mobileInput = document.getElementById("coMobile");
+    const nameInput = document.getElementById("coName");
 
-    const modeRadios        = document.querySelectorAll('input[name="delivery_mode"]');
-    const addressBlock      = document.getElementById("addressBlock");
-    const pickupInfo        = document.getElementById("pickupInfo");
+    const modeRadios = document.querySelectorAll('input[name="delivery_mode"]');
+    const addressBlock = document.getElementById("addressBlock");
+    const pickupInfo = document.getElementById("pickupInfo");
 
     const pickupBranchSelect = document.getElementById("coPickupBranch");
-    const pickupBranchHint   = document.getElementById("pickupBranchHint");
+    const pickupBranchHint = document.getElementById("pickupBranchHint");
 
-    const aptSearch         = document.getElementById("coApartmentSearch");
-    const aptResults        = document.getElementById("apartmentResults");
-    const aptIdInput        = document.getElementById("coApartmentId");
-    const aptCodeInput      = document.getElementById("coApartmentCode");
+    const aptSearch = document.getElementById("coApartmentSearch");
+    const aptResults = document.getElementById("apartmentResults");
+    const aptIdInput = document.getElementById("coApartmentId");
+    const aptCodeInput = document.getElementById("coApartmentCode");
 
-    const divisionField     = document.getElementById("divisionField");
-    const divisionSearch    = document.getElementById("coDivisionSearch");
-    const divisionResults   = document.getElementById("divisionResults");
-    const divisionInput     = document.getElementById("coDivision");
-    const divisionHint      = document.getElementById("divisionHint");
+    const divisionField = document.getElementById("divisionField");
+    const divisionSearch = document.getElementById("coDivisionSearch");
+    const divisionResults = document.getElementById("divisionResults");
+    const divisionInput = document.getElementById("coDivision");
+    const divisionHint = document.getElementById("divisionHint");
 
-    const subTotalEl        = document.getElementById("subTotal");
-    const deliveryEl        = document.getElementById("deliveryCharge");
-    const deliveryLabel     = document.getElementById("deliveryLabel");
-    const grandTotalEl      = document.getElementById("grandTotal");
-    const payNowBtn         = document.getElementById("payNowBtn");
-    const payNowText        = document.getElementById("payNowText");
-    const mobileHint        = document.getElementById("mobileHint");
+    const subTotalEl = document.getElementById("subTotal");
+    const deliveryEl = document.getElementById("deliveryCharge");
+    const deliveryLabel = document.getElementById("deliveryLabel");
+    const grandTotalEl = document.getElementById("grandTotal");
+    const payNowBtn = document.getElementById("payNowBtn");
+    const payNowText = document.getElementById("payNowText");
+    const mobileHint = document.getElementById("mobileHint");
 
-    const walletRow         = document.getElementById("walletRow");
-    const walletAppliedEl   = document.getElementById("walletApplied");
-    const walletBox         = document.getElementById("walletBox");
-    const walletBalanceEl   = document.getElementById("walletBalance");
-    const walletMsg         = document.getElementById("walletMsg");
+    const walletRow = document.getElementById("walletRow");
+    const walletAppliedEl = document.getElementById("walletApplied");
+    const walletBox = document.getElementById("walletBox");
+    const walletBalanceEl = document.getElementById("walletBalance");
+    const walletMsg = document.getElementById("walletMsg");
 
     /* Tax row */
-    const taxRow            = document.getElementById("taxRow");
-    const taxLabelEl        = document.getElementById("taxLabel");
-    const taxAmountEl       = document.getElementById("taxAmount");
+    const taxRow = document.getElementById("taxRow");
+    const taxLabelEl = document.getElementById("taxLabel");
+    const taxAmountEl = document.getElementById("taxAmount");
 
-    let apartmentsCache     = [];
-    let divisionsCache      = [];
-    let branchesCache       = [];
-    let apartmentsLoaded    = false;
-    let selectedDivision    = null;
-    let subtotal            = Number(window.CART_SUBTOTAL || 0);
-    let deliveryCharge      = 0;
-    let currentMode         = "delivery";
+    let apartmentsCache = [];
+    let divisionsCache = [];
+    let branchesCache = [];
+    let apartmentsLoaded = false;
+    let selectedDivision = null;
+    let subtotal = Number(window.CART_SUBTOTAL || 0);
+    let deliveryCharge = 0;
+    let currentMode = "delivery";
 
     /* Wallet (from PHP) */
-    const walletBalance     = Number(window.WALLET_BALANCE || 0);
+    const walletBalance = Number(window.WALLET_BALANCE || 0);
 
     /* Container — used only when sending order to backend */
-    const containerTotal    = Number(window.CONTAINER_TOTAL || 0);
+    const containerTotal = Number(window.CONTAINER_TOTAL || 0);
 
     /* Tax settings (from PHP) */
     const TAX = (window.TAX_SETTINGS && typeof window.TAX_SETTINGS === "object")
         ? {
             status: Number(window.TAX_SETTINGS.status) || 0,
-            rate:   Number(window.TAX_SETTINGS.rate) || 0,
-            type:   (window.TAX_SETTINGS.type === "inclusive") ? "inclusive" : "exclusive"
+            rate: Number(window.TAX_SETTINGS.rate) || 0,
+            type: (window.TAX_SETTINGS.type === "inclusive") ? "inclusive" : "exclusive"
         }
         : { status: 0, rate: 0, type: "exclusive" };
 
@@ -139,7 +138,7 @@
                         </option>
                     `).join("");
             })
-            .catch(() => {});
+            .catch(() => { });
     }
 
     /* =========================================================
@@ -197,9 +196,9 @@
         if (aptId <= 0) return;
 
         if (!aptIdInput.value) {
-            aptIdInput.value   = aptId;
+            aptIdInput.value = aptId;
             aptCodeInput.value = window.CUSTOMER_APARTMENT_CODE || "";
-            aptSearch.value    = window.CUSTOMER_APARTMENT_NAME || "";
+            aptSearch.value = window.CUSTOMER_APARTMENT_NAME || "";
         }
 
         if (selectedDivision) {
@@ -208,14 +207,14 @@
         }
 
         const savedDivision = window.CUSTOMER_DIVISION || "";
-        const savedCharge   = Number(window.CUSTOMER_DIVISION_CHARGE || 0);
+        const savedCharge = Number(window.CUSTOMER_DIVISION_CHARGE || 0);
 
         if (savedDivision !== "") {
-            divisionInput.value       = savedDivision;
-            divisionSearch.value      = "Division " + savedDivision;
-            selectedDivision          = savedDivision;
-            deliveryCharge            = Math.round(savedCharge);
-            divisionHint.textContent  = "Delivery charge: ₹" + deliveryCharge;
+            divisionInput.value = savedDivision;
+            divisionSearch.value = "Division " + savedDivision;
+            selectedDivision = savedDivision;
+            deliveryCharge = Math.round(savedCharge);
+            divisionHint.textContent = "Delivery charge: ₹" + deliveryCharge;
             divisionField.style.display = "block";
 
             loadDivisions(aptId, savedDivision, true);
@@ -260,9 +259,9 @@
                         setMode("delivery");
                     }
 
-                    aptIdInput.value   = res.data.apartment_id;
+                    aptIdInput.value = res.data.apartment_id;
                     aptCodeInput.value = res.data.apartment_code || "";
-                    aptSearch.value    = res.data.apartment_name || "";
+                    aptSearch.value = res.data.apartment_name || "";
 
                     loadDivisions(res.data.apartment_id, res.data.division || "");
 
@@ -271,7 +270,7 @@
                     if (mobileHint) mobileHint.textContent = "Welcome back, " + (res.data.name || "");
                 }
             })
-            .catch(() => {});
+            .catch(() => { });
     }
 
     if (!IS_LOGGED_IN) {
@@ -358,9 +357,9 @@
         const item = e.target.closest(".mm-co-dd-item");
         if (!item) return;
 
-        aptIdInput.value   = item.dataset.id;
+        aptIdInput.value = item.dataset.id;
         aptCodeInput.value = item.dataset.code;
-        aptSearch.value    = item.dataset.name;
+        aptSearch.value = item.dataset.name;
         aptResults.classList.remove("open");
 
         loadDivisions(item.dataset.id, "");
@@ -400,7 +399,7 @@
 
                 if (!keepSelection) {
                     divisionSearch.value = "";
-                    divisionInput.value  = "";
+                    divisionInput.value = "";
                     divisionHint.textContent = "";
                     selectedDivision = null;
                     deliveryCharge = 0;
@@ -412,13 +411,13 @@
                     if (match) selectDivision(match);
                 }
             })
-            .catch(() => {});
+            .catch(() => { });
     }
 
     function hideDivisionField() {
         divisionField.style.display = "none";
         divisionSearch.value = "";
-        divisionInput.value  = "";
+        divisionInput.value = "";
         divisionHint.textContent = "";
         selectedDivision = null;
         deliveryCharge = 0;
@@ -463,7 +462,7 @@
 
         selectDivision({
             division: item.dataset.division,
-            charge:   Number(item.dataset.charge || 0)
+            charge: Number(item.dataset.charge || 0)
         });
         divisionResults.classList.remove("open");
     });
@@ -478,8 +477,7 @@
     }
 
     /* =========================================================
-       TOTALS — with tax support
-       Container deposit is NOT shown on checkout.
+       TOTALS — wallet can cover entire bill
        ========================================================= */
     function updateTotals() {
         /* Subtotal */
@@ -493,7 +491,6 @@
         /* Tax on food subtotal only */
         const tax = calcTax(subtotal);
 
-        /* Tax row visibility — works for both inclusive and exclusive */
         if (taxRow && taxAmountEl && taxLabelEl) {
             if (tax.active) {
                 taxLabelEl.textContent = "Tax (" + tax.rate + "%)" +
@@ -505,7 +502,7 @@
             }
         }
 
-        /* Food + tax + delivery = grand base */
+        /* Bill = food + tax + delivery */
         let foodPlusDelivery;
         if (tax.active && tax.type === "exclusive") {
             foodPlusDelivery = subtotal + tax.amount + delivery;
@@ -513,14 +510,8 @@
             foodPlusDelivery = subtotal + delivery;
         }
 
-        /* Wallet can only reduce the food+tax portion (not delivery) */
-        const foodPortion = (tax.active && tax.type === "exclusive")
-            ? subtotal + tax.amount
-            : subtotal;
-
-        const walletUsable = Math.max(0, Math.min(walletBalance, foodPortion));
-
-        /* Final payable = food + tax + delivery − wallet */
+        /* Wallet can now cover the entire bill */
+        const walletUsable = Math.max(0, Math.min(walletBalance, foodPlusDelivery));
         const payable = Math.max(0, foodPlusDelivery - walletUsable);
 
         /* Wallet row */
@@ -567,8 +558,8 @@
        PAY NOW
        ========================================================= */
     payNowBtn?.addEventListener("click", () => {
-        const mobile  = mobileInput.value.trim();
-        const name    = nameInput.value.trim();
+        const mobile = mobileInput.value.trim();
+        const name = nameInput.value.trim();
 
         if (!/^[0-9]{10,15}$/.test(mobile)) { showToast("Enter a valid mobile number.", "error"); mobileInput.focus(); return; }
         if (name.length < 3) { showToast("Please enter your name.", "error"); nameInput.focus(); return; }
@@ -598,7 +589,7 @@
             pickupBranchName = opt ? (opt.dataset.name || opt.textContent.trim()) : "";
         }
 
-        /* Tax + totals */
+        /* Totals */
         const delivery = (mode === "pickup") ? 0 : Math.round(Number(deliveryCharge || 0));
         const tax = calcTax(subtotal);
 
@@ -609,12 +600,9 @@
             foodPlusDelivery = subtotal + delivery;
         }
 
-        const foodPortion = (tax.active && tax.type === "exclusive")
-            ? subtotal + tax.amount
-            : subtotal;
-
-        const walletUsable = Math.max(0, Math.min(walletBalance, foodPortion));
-        const payable      = Math.max(0, foodPlusDelivery - walletUsable);
+        /* Wallet covers entire bill */
+        const walletUsable = Math.max(0, Math.min(walletBalance, foodPlusDelivery));
+        const payable = Math.max(0, foodPlusDelivery - walletUsable);
 
         const orderPayload = {
             customer_name: name,
@@ -631,7 +619,7 @@
             total: foodPlusDelivery
         };
 
-        /* Wallet-only → skip Razorpay */
+        /* Wallet fully covers bill → place directly */
         if (payable <= 0) {
             payNowBtn.disabled = true;
             payNowText.textContent = "Placing...";
