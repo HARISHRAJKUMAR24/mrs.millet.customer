@@ -47,65 +47,163 @@
                     </div>
                 </div>
 
-                <!-- Apartment (searchable OR free-typed) -->
-                <div class="cust-field" style="position:relative;">
-                    <label>Apartment / Community</label>
-                    <div class="cust-input-wrap">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M3 21V8l9-5 9 5v13" />
-                            <path d="M9 21V12h6v9" />
-                        </svg>
-                        <input type="text" class="cust-input" id="regApartmentSearch"
-                            placeholder="Search or type your apartment..." autocomplete="off">
-                    </div>
-                    <input type="hidden" id="regApartmentId">
-                    <input type="hidden" id="regApartmentCode">
-                    <div id="regApartmentList" class="mm-co-dropdown" role="listbox" style="display:none;"></div>
-                    <p class="mm-co-hint" id="regApartmentHint"></p>
-                </div>
-
-                <!-- Division (select OR free-typed) -->
+                <!-- ADDRESS TYPE TOGGLE -->
                 <div class="cust-field">
-                    <label>Division</label>
-                    <div class="cust-input-wrap" id="regDivisionWrap">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="3" y="3" width="7" height="7" rx="1" />
-                            <rect x="14" y="3" width="7" height="7" rx="1" />
-                            <rect x="3" y="14" width="7" height="7" rx="1" />
-                            <rect x="14" y="14" width="7" height="7" rx="1" />
-                        </svg>
-                        <select class="cust-input" id="regDivision">
-                            <option value="">Select apartment first</option>
-                        </select>
-                        <input type="text" class="cust-input" id="regDivisionText"
-                               placeholder="Type your division (e.g. 4, Block B)"
-                               maxlength="100" style="display:none;">
-                    </div>
-                    <p class="mm-co-hint" id="regDivisionHint"></p>
-                </div>
-
-                <!-- Password — only shown for known apartments -->
-                <div class="cust-field" id="regPasswordField" style="display:none;">
-                    <label>Create Password</label>
-                    <div class="cust-input-wrap">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="3" y="11" width="18" height="11" rx="2" />
-                            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                        </svg>
-                        <input type="password" class="cust-input" id="regPassword"
-                            placeholder="Min 3 characters" maxlength="100" autocomplete="new-password">
-                        <button type="button" class="pw-toggle" data-target="regPassword" aria-label="Show password">
-                            <svg class="eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                                <circle cx="12" cy="12" r="3" />
-                            </svg>
-                            <svg class="eye-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
-                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                                <line x1="1" y1="1" x2="23" y2="23" />
-                            </svg>
+                    <label>Address Type</label>
+                    <div class="reg-toggle" role="tablist">
+                        <button type="button" class="reg-toggle-btn active" id="btnAptMode" data-mode="apartment">
+                            <i class="bi bi-building"></i> Apartment
+                        </button>
+                        <button type="button" class="reg-toggle-btn" id="btnHouseMode" data-mode="individual_house">
+                            <i class="bi bi-house-door"></i> Individual House
                         </button>
                     </div>
                 </div>
+
+                <!-- ================= APARTMENT MODE ================= -->
+                <div id="regApartmentBlock">
+
+                    <!-- Apartment (searchable OR free-typed) -->
+                    <div class="cust-field" style="position:relative;">
+                        <label>Apartment / Community</label>
+                        <div class="cust-input-wrap">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M3 21V8l9-5 9 5v13" />
+                                <path d="M9 21V12h6v9" />
+                            </svg>
+                            <input type="text" class="cust-input" id="regApartmentSearch"
+                                placeholder="Search or type your apartment..." autocomplete="off">
+                        </div>
+                        <input type="hidden" id="regApartmentId">
+                        <input type="hidden" id="regApartmentCode">
+                        <div id="regApartmentList" class="mm-co-dropdown" role="listbox" style="display:none;"></div>
+                        <p class="mm-co-hint" id="regApartmentHint"></p>
+                    </div>
+
+                    <!-- Block / Floor / Door No — 3 searchable inputs -->
+                    <div class="cust-field" style="position:relative;">
+                        <label>Block <span style="color:#b51f2c;">*</span></label>
+                        <div class="cust-input-wrap">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M3 21V8l9-5 9 5v13" />
+                                <path d="M9 21V12h6v9" />
+                            </svg>
+                            <input type="text" class="cust-input" id="regBlock"
+                                placeholder="Search or type block (e.g. A)" autocomplete="off">
+                        </div>
+                        <div id="regBlockList" class="reg-dropdown" style="display:none;"></div>
+                    </div>
+
+                    <div class="cust-field" style="position:relative;">
+                        <label>Floor <span style="color:#b51f2c;">*</span></label>
+                        <div class="cust-input-wrap">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="3" width="7" height="7" rx="1" />
+                                <rect x="14" y="3" width="7" height="7" rx="1" />
+                                <rect x="3" y="14" width="7" height="7" rx="1" />
+                                <rect x="14" y="14" width="7" height="7" rx="1" />
+                            </svg>
+                            <input type="text" class="cust-input" id="regFloor"
+                                placeholder="Search or type floor (e.g. 1)" autocomplete="off">
+                        </div>
+                        <div id="regFloorList" class="reg-dropdown" style="display:none;"></div>
+                    </div>
+
+                    <div class="cust-field" style="position:relative;">
+                        <label>Door No <span style="color:#b51f2c;">*</span></label>
+                        <div class="cust-input-wrap">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="3" width="7" height="7" rx="1" />
+                                <rect x="14" y="3" width="7" height="7" rx="1" />
+                                <rect x="3" y="14" width="7" height="7" rx="1" />
+                                <rect x="14" y="14" width="7" height="7" rx="1" />
+                            </svg>
+                            <input type="text" class="cust-input" id="regDoorNo"
+                                placeholder="Search or type door no (e.g. 101)" autocomplete="off">
+                        </div>
+                        <div id="regDoorNoList" class="reg-dropdown" style="display:none;"></div>
+                        <p class="mm-co-hint" id="regVariantHint"></p>
+                    </div>
+
+                    <!-- Password -->
+                    <div class="cust-field" id="regPasswordField" style="display:none;">
+                        <label>Create Password</label>
+                        <div class="cust-input-wrap">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="11" width="18" height="11" rx="2" />
+                                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                            </svg>
+                            <input type="password" class="cust-input" id="regPassword"
+                                placeholder="Min 3 characters" maxlength="100" autocomplete="new-password">
+                            <button type="button" class="pw-toggle" data-target="regPassword" aria-label="Show password">
+                                <svg class="eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                    <circle cx="12" cy="12" r="3" />
+                                </svg>
+                                <svg class="eye-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
+                                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                                    <line x1="1" y1="1" x2="23" y2="23" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                </div><!-- /#regApartmentBlock -->
+
+                <!-- ================= INDIVIDUAL HOUSE MODE ================= -->
+                <div id="regHouseBlock" style="display:none;">
+
+                    <div class="cust-field">
+                        <label>Full Address <span style="color:#b51f2c;">*</span></label>
+                        <div class="cust-input-wrap">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M3 21V8l9-5 9 5v13" />
+                                <path d="M9 21V12h6v9" />
+                            </svg>
+                            <input type="text" class="cust-input" id="regHouseAddress"
+                                placeholder="Door No, Street, Area, City"
+                                maxlength="250">
+                        </div>
+                    </div>
+
+                    <div class="cust-field">
+                        <label>Google Maps Location <span style="color:#b51f2c;">*</span></label>
+                        <div class="cust-input-wrap">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 1 1 18 0z" />
+                                <circle cx="12" cy="10" r="3" />
+                            </svg>
+                            <input type="text" class="cust-input" id="regHouseMap"
+                                placeholder="Tap the button below to pin your location"
+                                maxlength="500" readonly>
+                        </div>
+                        <button type="button" class="loc-btn" id="regHouseLocBtn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;">
+                                <circle cx="12" cy="12" r="3" />
+                                <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+                            </svg>
+                            <span id="regHouseLocBtnText">Get My Current Location</span>
+                        </button>
+                        <p class="mm-co-hint" id="regHouseLocHint"></p>
+                    </div>
+
+                    <div class="cust-field">
+                        <label>House Image (optional)</label>
+                        <div class="img-drop" id="regHouseImgDrop">
+                            <input type="file" id="regHouseImg" accept="image/*" style="display:none;">
+                            <div id="regHouseImgPreview" class="img-drop-empty">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;">
+                                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                                    <circle cx="8.5" cy="8.5" r="1.5" />
+                                    <path d="M21 15l-5-5L5 21" />
+                                </svg>
+                                <span>Tap to upload a photo of your house</span>
+                            </div>
+                        </div>
+                        <p class="mm-co-hint">Helps our delivery partner find you faster.</p>
+                    </div>
+
+                </div><!-- /#regHouseBlock -->
 
                 <button type="submit" class="cust-btn" id="registerBtn">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
@@ -119,7 +217,6 @@
 </div>
 
 <style>
-    /* ===== Eye toggle button ===== */
     .pw-toggle {
         position: absolute;
         right: 10px;
@@ -138,57 +235,166 @@
         transition: .15s ease;
         padding: 0;
     }
+
     .pw-toggle:hover {
         background: #fbe8e9;
         color: #b51f2c;
     }
+
     .pw-toggle svg {
         width: 17px;
         height: 17px;
     }
 
-    /* Make room for the eye icon inside password input */
     .cust-input-wrap:has(.pw-toggle) .cust-input {
         padding-right: 46px;
     }
 
-    #regApartmentList {
+    .reg-toggle {
+        display: flex;
+        gap: 8px;
+    }
+
+    .reg-toggle-btn {
+        flex: 1;
+        padding: 11px 14px;
+        border: 1.5px solid #ece5da;
+        background: #fffdf9;
+        color: #6f675f;
+        border-radius: 10px;
+        font-size: 12.5px;
+        font-weight: 700;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        transition: .15s ease;
+    }
+
+    .reg-toggle-btn:hover {
+        background: #faf7f0;
+        color: #302923;
+    }
+
+    .reg-toggle-btn.active {
+        background: #fff5f5;
+        border-color: #d98a91;
+        color: #b51f2c;
+        box-shadow: 0 0 0 3px rgba(181, 31, 44, .06);
+    }
+
+    #regApartmentList,
+    .reg-dropdown {
         position: absolute;
         left: 0;
         right: 0;
         top: calc(100% + 4px);
-        max-height: 220px;
+        max-height: 200px;
         overflow-y: auto;
         background: #fff;
         border: 1.5px solid #ece5da;
         border-radius: 12px;
-        box-shadow: 0 15px 35px rgba(0,0,0,.12);
+        box-shadow: 0 15px 35px rgba(0, 0, 0, .12);
         z-index: 30;
     }
-    #regApartmentList .mm-co-dd-item {
+
+    #regApartmentList .mm-co-dd-item,
+    .reg-dropdown .mm-co-dd-item {
         padding: 10px 14px;
         cursor: pointer;
         border-bottom: 1px solid #f7f2ec;
         font-size: 12.5px;
     }
-    #regApartmentList .mm-co-dd-item:last-child { border-bottom: 0; }
-    #regApartmentList .mm-co-dd-item:hover { background: #fff5f5; }
-    #regApartmentList .mm-co-dd-item strong { display: block; color: #302923; font-weight: 700; }
-    #regApartmentList .mm-co-dd-item span { font-size: 11px; color: #948c82; }
 
-    #regDivision {
-        padding-left: 42px;
-        appearance: none;
-        -webkit-appearance: none;
-        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23948c82' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
-        background-repeat: no-repeat;
-        background-position: right 14px center;
-        background-size: 14px;
+    #regApartmentList .mm-co-dd-item:last-child,
+    .reg-dropdown .mm-co-dd-item:last-child {
+        border-bottom: 0;
+    }
+
+    #regApartmentList .mm-co-dd-item:hover,
+    .reg-dropdown .mm-co-dd-item:hover {
+        background: #fff5f5;
+    }
+
+    #regApartmentList .mm-co-dd-item strong {
+        display: block;
+        color: #302923;
+        font-weight: 700;
+    }
+
+    #regApartmentList .mm-co-dd-item span {
+        font-size: 11px;
+        color: #948c82;
+    }
+
+    .loc-btn {
+        margin-top: 10px;
+        width: 100%;
+        padding: 11px 14px;
+        background: #fff5f5;
+        border: 1.5px dashed #d98a91;
+        color: #b51f2c;
+        border-radius: 10px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        transition: .15s ease;
+    }
+
+    .loc-btn:hover:not(:disabled) {
+        background: #fbe8e9;
+        border-style: solid;
+    }
+
+    .loc-btn:disabled {
+        opacity: .6;
+        cursor: wait;
+    }
+
+    .loc-btn.success {
+        background: #e8f6ea;
+        border-color: #a5d6a7;
+        color: #2e7d32;
+        border-style: solid;
+    }
+
+    .img-drop {
+        border: 1.5px dashed #d8cdbf;
+        border-radius: 12px;
+        background: #fffdf9;
+        overflow: hidden;
+        transition: .15s ease;
+    }
+
+    .img-drop:hover {
+        border-color: #d98a91;
+        background: #fff;
+    }
+
+    .img-drop-empty {
+        padding: 28px 16px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        color: #948c82;
+        font-size: 12px;
         cursor: pointer;
     }
-    #regDivision:disabled {
-        opacity: .6;
-        cursor: not-allowed;
-        background: #f7f2ec;
+
+    .img-drop-empty svg {
+        color: #d5cbbd;
+    }
+
+    .img-drop img {
+        display: block;
+        width: 100%;
+        height: 180px;
+        object-fit: cover;
     }
 </style>

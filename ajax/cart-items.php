@@ -1,8 +1,7 @@
 <?php
 /* =========================================================
-   MRS MILL@ — GET CART ITEMS
+   MRS MILL@ — CART ITEMS
    File: ./ajax/cart-items.php
-   Returns cart rows from DB (logged in) or session (guest).
    ========================================================= */
 
 require_once __DIR__ . '/../config/config.php';
@@ -10,16 +9,27 @@ require_once __DIR__ . '/../config/function.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
-$customerId = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0
+$customerRowId = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0
     ? (int)$_SESSION['customer_id']
     : 0;
+$customerCode = (string)($_SESSION['customer_code'] ?? '');
 
 $items = [];
 $count = 0;
 $total = 0.0;
 
 try {
-    if ($customerId > 0) {
+    if ($customerRowId > 0) {
+
+        if ($customerCode === '') {
+            try {
+                $cs = $pdo->prepare("SELECT customer_id FROM customers WHERE id = ? LIMIT 1");
+                $cs->execute([$customerRowId]);
+                $customerCode = (string)$cs->fetchColumn();
+                $_SESSION['customer_code'] = $customerCode;
+            } catch (PDOException $e) {}
+        }
+
         $stmt = $pdo->prepare(
             "SELECT id AS cart_id, product_id, product_code AS code, product_name AS name,
                     product_image AS image, variant_id, variant_name, variant_qty,
@@ -28,7 +38,7 @@ try {
              WHERE customer_id = ?
              ORDER BY id DESC"
         );
-        $stmt->execute([$customerId]);
+        $stmt->execute([$customerRowId]);
         $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
     } else {
         if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
@@ -56,12 +66,14 @@ try {
     }
 
     jsonResponse(true, 'OK', [
-        'items'      => $items,
-        'cart_count' => $count,
-        'cart_total' => $total,
-        'source'     => $customerId > 0 ? 'db' : 'session'
+        'items'         => $items,
+        'cart_count'    => $count,
+        'cart_total'    => $total,
+        'customer_id'   => $customerRowId,
+        'customer_code' => $customerCode,
+        'source'        => $customerRowId > 0 ? 'db' : 'session'
     ]);
 
 } catch (PDOException $e) {
-    jsonResponse(false, 'Failed to load cart.');
+    jsonResponse(false, 'Failed to load cart: ' . $e->getMessage());
 }

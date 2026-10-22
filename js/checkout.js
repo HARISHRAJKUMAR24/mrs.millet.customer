@@ -1,7 +1,8 @@
 /* =========================================================
-   MRS MILL@ — CHECKOUT PAGE
+   MRS MILL@ — CHECKOUT
    File: ./js/checkout.js
-   Wallet can cover the entire bill (food + tax + delivery).
+   Address branch is decided by window.CUSTOMER_ADDRESS_TYPE.
+   Wallet covers food + tax + delivery.
    ========================================================= */
 
 (function () {
@@ -9,6 +10,7 @@
 
     const MAIN_URL = window.MAIN_URL || "./";
     const IS_LOGGED_IN = !!window.IS_LOGGED_IN;
+    const ADDRESS_TYPE = String(window.CUSTOMER_ADDRESS_TYPE || "apartment");
 
     /* ---------- DOM ---------- */
     const mobileInput = document.getElementById("coMobile");
@@ -21,6 +23,7 @@
     const pickupBranchSelect = document.getElementById("coPickupBranch");
     const pickupBranchHint = document.getElementById("pickupBranchHint");
 
+    /* Optional elements (may be hidden inputs if logged-in read-only) */
     const aptSearch = document.getElementById("coApartmentSearch");
     const aptResults = document.getElementById("apartmentResults");
     const aptIdInput = document.getElementById("coApartmentId");
@@ -30,7 +33,13 @@
     const divisionSearch = document.getElementById("coDivisionSearch");
     const divisionResults = document.getElementById("divisionResults");
     const divisionInput = document.getElementById("coDivision");
+    const divisionChargeInput = document.getElementById("coDivisionCharge");
     const divisionHint = document.getElementById("divisionHint");
+
+    const addressTypeInput = document.getElementById("coAddressType");
+    const fullAddressInput = document.getElementById("coFullAddress");
+    const mapLinkInput = document.getElementById("coMapLink");
+    const houseImageInput = document.getElementById("coHouseImage");
 
     const subTotalEl = document.getElementById("subTotal");
     const deliveryEl = document.getElementById("deliveryCharge");
@@ -46,7 +55,6 @@
     const walletBalanceEl = document.getElementById("walletBalance");
     const walletMsg = document.getElementById("walletMsg");
 
-    /* Tax row */
     const taxRow = document.getElementById("taxRow");
     const taxLabelEl = document.getElementById("taxLabel");
     const taxAmountEl = document.getElementById("taxAmount");
@@ -60,13 +68,9 @@
     let deliveryCharge = 0;
     let currentMode = "delivery";
 
-    /* Wallet (from PHP) */
     const walletBalance = Number(window.WALLET_BALANCE || 0);
-
-    /* Container — used only when sending order to backend */
     const containerTotal = Number(window.CONTAINER_TOTAL || 0);
 
-    /* Tax settings (from PHP) */
     const TAX = (window.TAX_SETTINGS && typeof window.TAX_SETTINGS === "object")
         ? {
             status: Number(window.TAX_SETTINGS.status) || 0,
@@ -76,9 +80,7 @@
         : { status: 0, rate: 0, type: "exclusive" };
 
     /* ---------- Helpers ---------- */
-    function money(n) {
-        return "₹" + Math.round(Number(n) || 0);
-    }
+    function money(n) { return "₹" + Math.round(Number(n) || 0); }
 
     function escapeHtml(s) {
         return String(s == null ? "" : s)
@@ -100,25 +102,19 @@
         return r ? r.value : "delivery";
     }
 
-    /* ---------- TAX ---------- */
     function calcTax(foodSubtotal) {
         if (!TAX || Number(TAX.status) !== 1 || Number(TAX.rate) <= 0) {
             return { amount: 0, rate: 0, type: "exclusive", active: false };
         }
         const rate = Number(TAX.rate);
-        const type = (TAX.type === "inclusive") ? "inclusive" : "exclusive";
-        let amount = 0;
-        if (type === "inclusive") {
-            amount = foodSubtotal - (foodSubtotal / (1 + (rate / 100)));
-        } else {
-            amount = foodSubtotal * (rate / 100);
-        }
+        const type = TAX.type;
+        let amount = type === "inclusive"
+            ? foodSubtotal - (foodSubtotal / (1 + (rate / 100)))
+            : foodSubtotal * (rate / 100);
         return { amount: Math.round(amount), rate: rate, type: type, active: true };
     }
 
-    /* =========================================================
-       BRANCHES
-       ========================================================= */
+    /* ---------- BRANCHES ---------- */
     let branchesLoaded = false;
     function loadBranches() {
         if (!pickupBranchSelect || branchesLoaded) return;
@@ -129,7 +125,6 @@
             .then(res => {
                 if (!res || !res.success || !Array.isArray(res.data)) return;
                 branchesCache = res.data;
-
                 pickupBranchSelect.innerHTML =
                     `<option value="">— Select branch —</option>` +
                     res.data.map(b => `
@@ -141,9 +136,7 @@
             .catch(() => { });
     }
 
-    /* =========================================================
-       DELIVERY MODE TOGGLE
-       ========================================================= */
+    /* ---------- MODE ---------- */
     function setMode(mode) {
         currentMode = mode;
 
@@ -161,8 +154,8 @@
 
             selectedDivision = null;
             divisionsCache = [];
-
             deliveryCharge = 0;
+
             if (deliveryLabel) deliveryLabel.textContent = "Pickup charge";
             if (deliveryEl) deliveryEl.textContent = "₹0";
             if (pickupBranchHint) pickupBranchHint.textContent = "Pick a branch to collect your order from.";
@@ -170,11 +163,9 @@
         } else {
             if (addressBlock) addressBlock.classList.remove("hidden");
             if (pickupInfo) pickupInfo.classList.remove("show");
-
             if (pickupBranchSelect) pickupBranchSelect.value = "";
 
             restoreCustomerAddress();
-
             if (deliveryLabel) deliveryLabel.textContent = "Delivery charge";
             if (deliveryEl) deliveryEl.textContent = money(deliveryCharge);
         }
@@ -182,52 +173,39 @@
         updateTotals();
     }
 
-    modeRadios.forEach(r => {
-        r.addEventListener("change", function () {
-            setMode(this.value);
-        });
-    });
+    modeRadios.forEach(r => r.addEventListener("change", function () { setMode(this.value); }));
 
-    /* =========================================================
-       RESTORE CUSTOMER ADDRESS
-       ========================================================= */
+    /* ---------- RESTORE READ-ONLY ADDRESS ---------- */
     function restoreCustomerAddress() {
-        const aptId = Number(window.CUSTOMER_APARTMENT_ID || 0);
-        if (aptId <= 0) return;
-
-        if (!aptIdInput.value) {
-            aptIdInput.value = aptId;
-            aptCodeInput.value = window.CUSTOMER_APARTMENT_CODE || "";
-            aptSearch.value = window.CUSTOMER_APARTMENT_NAME || "";
-        }
-
-        if (selectedDivision) {
+        /* Individual house */
+        if (ADDRESS_TYPE === "individual_house") {
+            /* nothing to restore — hidden inputs already there */
+            deliveryCharge = 0;
             updateTotals();
             return;
         }
 
-        const savedDivision = window.CUSTOMER_DIVISION || "";
-        const savedCharge = Number(window.CUSTOMER_DIVISION_CHARGE || 0);
+        /* Apartment read-only */
+        const aptId = Number(window.CUSTOMER_APARTMENT_ID || 0);
+        const savedDiv = String(window.CUSTOMER_DIVISION || "");
+        const savedChg = Number(window.CUSTOMER_DIVISION_CHARGE || 0);
 
-        if (savedDivision !== "") {
-            divisionInput.value = savedDivision;
-            divisionSearch.value = "Division " + savedDivision;
-            selectedDivision = savedDivision;
-            deliveryCharge = Math.round(savedCharge);
-            divisionHint.textContent = "Delivery charge: ₹" + deliveryCharge;
-            divisionField.style.display = "block";
+        if (aptId > 0) {
+            if (selectedDivision) { updateTotals(); return; }
 
-            loadDivisions(aptId, savedDivision, true);
-        } else {
-            loadDivisions(aptId, "");
+            if (savedDiv !== "") {
+                if (divisionInput) divisionInput.value = savedDiv;
+                if (divisionSearch) divisionSearch.value = "Division " + savedDiv;
+                selectedDivision = savedDiv;
+                deliveryCharge = Math.round(savedChg);
+                if (divisionHint) divisionHint.textContent = "Delivery charge: ₹" + deliveryCharge;
+            }
         }
 
         updateTotals();
     }
 
-    /* =========================================================
-       MOBILE LOOKUP
-       ========================================================= */
+    /* ---------- MOBILE LOOKUP (guests only) ---------- */
     let mobileTimer = null;
     let lastLookupMobile = "";
 
@@ -242,50 +220,26 @@
         })
             .then(r => r.json().catch(() => null))
             .then(res => {
-                if (!res || !res.success) return;
-                if (!res.data || !res.data.found) {
-                    if (mobileHint) mobileHint.textContent = "We'll use this for delivery updates.";
-                    return;
-                }
+                if (!res || !res.success || !res.data || !res.data.found) return;
 
-                if (res.data.name && !nameInput.value.trim()) {
+                if (res.data.name && nameInput && !nameInput.value.trim()) {
                     nameInput.value = res.data.name;
                 }
-
-                if (res.data.apartment_id && res.data.apartment_id > 0) {
-                    const deliveryRadio = document.querySelector('input[name="delivery_mode"][value="delivery"]');
-                    if (deliveryRadio && !deliveryRadio.checked) {
-                        deliveryRadio.checked = true;
-                        setMode("delivery");
-                    }
-
-                    aptIdInput.value = res.data.apartment_id;
-                    aptCodeInput.value = res.data.apartment_code || "";
-                    aptSearch.value = res.data.apartment_name || "";
-
-                    loadDivisions(res.data.apartment_id, res.data.division || "");
-
-                    if (mobileHint) mobileHint.textContent = "Welcome back! Address auto-filled.";
-                } else {
-                    if (mobileHint) mobileHint.textContent = "Welcome back, " + (res.data.name || "");
-                }
+                if (mobileHint) mobileHint.textContent = "Welcome back, " + (res.data.name || "");
             })
             .catch(() => { });
     }
 
-    if (!IS_LOGGED_IN) {
-        mobileInput?.addEventListener("input", () => {
+    if (!IS_LOGGED_IN && mobileInput) {
+        mobileInput.addEventListener("input", () => {
             mobileInput.value = mobileInput.value.replace(/[^0-9]/g, "").slice(0, 15);
             clearTimeout(mobileTimer);
-
             const m = mobileInput.value.trim();
             lastLookupMobile = "";
-
             if (m.length < 10) return;
             mobileTimer = setTimeout(() => runMobileLookup(m), 350);
         });
-
-        mobileInput?.addEventListener("blur", () => {
+        mobileInput.addEventListener("blur", () => {
             const m = mobileInput.value.trim();
             if (m.length >= 10) {
                 clearTimeout(mobileTimer);
@@ -294,48 +248,34 @@
         });
     }
 
-    /* =========================================================
-       APARTMENT SEARCH
-       ========================================================= */
+    /* ---------- APARTMENT MANUAL PICKER (guests) ---------- */
     function loadApartments(cb) {
-        if (apartmentsLoaded) {
-            if (typeof cb === "function") cb();
-            return;
-        }
+        if (apartmentsLoaded) { if (typeof cb === "function") cb(); return; }
         apartmentsLoaded = true;
-
         fetch(MAIN_URL + "ajax/get-appartment-divisions.php", { credentials: "same-origin" })
             .then(r => r.json().catch(() => null))
             .then(res => {
-                if (res && res.success && Array.isArray(res.data)) {
-                    apartmentsCache = res.data;
-                }
+                if (res && res.success && Array.isArray(res.data)) apartmentsCache = res.data;
                 if (typeof cb === "function") cb();
             })
-            .catch(() => {
-                if (typeof cb === "function") cb();
-            });
+            .catch(() => { if (typeof cb === "function") cb(); });
     }
 
     function renderApartmentResults(query) {
         if (!aptResults) return;
         const q = (query || "").trim().toLowerCase();
-
         let list = apartmentsCache;
         if (q) {
             list = list.filter(a =>
                 (a.apartment_name || "").toLowerCase().includes(q) ||
                 (a.apartment_code || "").toLowerCase().includes(q) ||
-                (a.apartment_address || "").toLowerCase().includes(q)
-            );
+                (a.apartment_address || "").toLowerCase().includes(q));
         }
-
         if (!list.length) {
             aptResults.innerHTML = `<div class="mm-co-dd-empty">No apartments found</div>`;
             aptResults.classList.add("open");
             return;
         }
-
         aptResults.innerHTML = list.slice(0, 30).map(a => `
             <div class="mm-co-dd-item" data-id="${a.id}" data-code="${escapeHtml(a.apartment_code)}" data-name="${escapeHtml(a.apartment_name)}">
                 <strong>${escapeHtml(a.apartment_name)}</strong>
@@ -345,23 +285,18 @@
         aptResults.classList.add("open");
     }
 
-    aptSearch?.addEventListener("focus", () => {
-        loadApartments(() => renderApartmentResults(aptSearch.value));
-    });
-
-    aptSearch?.addEventListener("input", () => {
-        loadApartments(() => renderApartmentResults(aptSearch.value));
-    });
+    if (aptSearch) {
+        aptSearch.addEventListener("focus", () => loadApartments(() => renderApartmentResults(aptSearch.value)));
+        aptSearch.addEventListener("input", () => loadApartments(() => renderApartmentResults(aptSearch.value)));
+    }
 
     aptResults?.addEventListener("click", (e) => {
         const item = e.target.closest(".mm-co-dd-item");
         if (!item) return;
-
-        aptIdInput.value = item.dataset.id;
-        aptCodeInput.value = item.dataset.code;
-        aptSearch.value = item.dataset.name;
+        if (aptIdInput) aptIdInput.value = item.dataset.id;
+        if (aptCodeInput) aptCodeInput.value = item.dataset.code;
+        if (aptSearch) aptSearch.value = item.dataset.name;
         aptResults.classList.remove("open");
-
         loadDivisions(item.dataset.id, "");
     });
 
@@ -374,38 +309,28 @@
         }
     });
 
-    /* =========================================================
-       DIVISIONS
-       ========================================================= */
-    function loadDivisions(apartmentId, preselect, keepSelection) {
+    /* ---------- DIVISION PICKER (guests only) ---------- */
+    function loadDivisions(apartmentId, preselect) {
         if (!apartmentId || getCheckedMode() === "pickup") return;
+        if (!divisionField) return;
 
         fetch(MAIN_URL + "ajax/get-appartment-divisions.php?apartment_id=" + encodeURIComponent(apartmentId), {
             credentials: "same-origin"
         })
             .then(r => r.json().catch(() => null))
             .then(res => {
-                if (!res || !res.success || !Array.isArray(res.data)) {
-                    if (!keepSelection) hideDivisionField();
+                if (!res || !res.success || !Array.isArray(res.data) || !res.data.length) {
+                    divisionField.style.display = "none";
                     return;
                 }
                 divisionsCache = res.data;
-                if (!divisionsCache.length) {
-                    if (!keepSelection) hideDivisionField();
-                    return;
-                }
-
                 divisionField.style.display = "block";
-
-                if (!keepSelection) {
-                    divisionSearch.value = "";
-                    divisionInput.value = "";
-                    divisionHint.textContent = "";
-                    selectedDivision = null;
-                    deliveryCharge = 0;
-                    updateTotals();
-                }
-
+                divisionSearch.value = "";
+                divisionInput.value = "";
+                divisionHint.textContent = "";
+                selectedDivision = null;
+                deliveryCharge = 0;
+                updateTotals();
                 if (preselect) {
                     const match = divisionsCache.find(d => String(d.division) === String(preselect));
                     if (match) selectDivision(match);
@@ -414,38 +339,22 @@
             .catch(() => { });
     }
 
-    function hideDivisionField() {
-        divisionField.style.display = "none";
-        divisionSearch.value = "";
-        divisionInput.value = "";
-        divisionHint.textContent = "";
-        selectedDivision = null;
-        deliveryCharge = 0;
-        updateTotals();
-    }
-
     function renderDivisionResults(query) {
         if (!divisionResults) return;
         const q = (query || "").trim().toLowerCase();
-
         let list = divisionsCache;
         if (q) {
             list = list.filter(d =>
                 String(d.division).toLowerCase().includes(q) ||
-                ("division " + d.division).toLowerCase().includes(q)
-            );
+                ("division " + d.division).toLowerCase().includes(q));
         }
-
         if (!list.length) {
             divisionResults.innerHTML = `<div class="mm-co-dd-empty">No divisions found</div>`;
             divisionResults.classList.add("open");
             return;
         }
-
         divisionResults.innerHTML = list.map(d => `
-            <div class="mm-co-dd-item"
-                 data-division="${escapeHtml(d.division)}"
-                 data-charge="${Number(d.charge)}">
+            <div class="mm-co-dd-item" data-division="${escapeHtml(d.division)}" data-charge="${Number(d.charge)}">
                 <strong>Division ${escapeHtml(d.division)}</strong>
                 <span>Delivery charge: ₹${Math.round(Number(d.charge))}</span>
             </div>
@@ -459,42 +368,33 @@
     divisionResults?.addEventListener("click", (e) => {
         const item = e.target.closest(".mm-co-dd-item");
         if (!item) return;
-
-        selectDivision({
-            division: item.dataset.division,
-            charge: Number(item.dataset.charge || 0)
-        });
+        selectDivision({ division: item.dataset.division, charge: Number(item.dataset.charge || 0) });
         divisionResults.classList.remove("open");
     });
 
     function selectDivision(d) {
+        if (!divisionInput) return;
         divisionInput.value = d.division;
-        divisionSearch.value = "Division " + d.division;
+        if (divisionSearch) divisionSearch.value = "Division " + d.division;
+        if (divisionChargeInput) divisionChargeInput.value = Number(d.charge || 0);
         selectedDivision = d.division;
         deliveryCharge = Math.round(Number(d.charge || 0));
-        divisionHint.textContent = "Delivery charge: ₹" + deliveryCharge;
+        if (divisionHint) divisionHint.textContent = "Delivery charge: ₹" + deliveryCharge;
         updateTotals();
     }
 
-    /* =========================================================
-       TOTALS — wallet can cover entire bill
-       ========================================================= */
+    /* ---------- TOTALS ---------- */
     function updateTotals() {
-        /* Subtotal */
         subTotalEl.textContent = money(subtotal);
 
-        /* Delivery */
         const mode = getCheckedMode();
         const delivery = (mode === "pickup") ? 0 : Math.round(Number(deliveryCharge || 0));
         deliveryEl.textContent = money(delivery);
 
-        /* Tax on food subtotal only */
         const tax = calcTax(subtotal);
-
         if (taxRow && taxAmountEl && taxLabelEl) {
             if (tax.active) {
-                taxLabelEl.textContent = "Tax (" + tax.rate + "%)" +
-                    (tax.type === "inclusive" ? " · incl." : "");
+                taxLabelEl.textContent = "Tax (" + tax.rate + "%)" + (tax.type === "inclusive" ? " · incl." : "");
                 taxAmountEl.textContent = money(tax.amount);
                 taxRow.style.display = "flex";
             } else {
@@ -502,7 +402,6 @@
             }
         }
 
-        /* Bill = food + tax + delivery */
         let foodPlusDelivery;
         if (tax.active && tax.type === "exclusive") {
             foodPlusDelivery = subtotal + tax.amount + delivery;
@@ -510,11 +409,9 @@
             foodPlusDelivery = subtotal + delivery;
         }
 
-        /* Wallet can now cover the entire bill */
         const walletUsable = Math.max(0, Math.min(walletBalance, foodPlusDelivery));
         const payable = Math.max(0, foodPlusDelivery - walletUsable);
 
-        /* Wallet row */
         if (walletRow) {
             if (walletUsable > 0) {
                 walletRow.style.display = "flex";
@@ -523,8 +420,6 @@
                 walletRow.style.display = "none";
             }
         }
-
-        /* Wallet message */
         if (walletMsg) {
             if (walletBalance > 0 && walletUsable > 0) {
                 walletMsg.classList.remove("warn");
@@ -538,20 +433,12 @@
             }
         }
 
-        /* Grand total */
         grandTotalEl.textContent = money(payable);
-
-        if (payNowText) {
-            payNowText.textContent = payable > 0 ? "Pay Now" : "Place Order";
-        }
+        if (payNowText) payNowText.textContent = payable > 0 ? "Pay Now" : "Place Order";
     }
     updateTotals();
-
-    /* Auto-fill address */
     (function autoFillAddress() {
-        if (Number(window.CUSTOMER_APARTMENT_ID || 0) > 0) {
-            restoreCustomerAddress();
-        }
+        if (Number(window.CUSTOMER_APARTMENT_ID || 0) > 0) restoreCustomerAddress();
     })();
 
     /* =========================================================
@@ -567,17 +454,31 @@
         const mode = getCheckedMode();
         currentMode = mode;
 
-        let aptId = "", aptCode = "", division = "";
-        let pickupBranchId = "", pickupBranchName = "";
+        /* Address payload from DOM */
+        let addrType = addressTypeInput ? addressTypeInput.value : "apartment";
+        let aptId = aptIdInput ? aptIdInput.value : "";
+        let aptCode = aptCodeInput ? aptCodeInput.value : "";
+        let divLabel = divisionInput ? divisionInput.value : "";
+        let divCharge = divisionChargeInput ? Number(divisionChargeInput.value || 0) : 0;
+        let fullAddr = fullAddressInput ? fullAddressInput.value.trim() : "";
+        let mapLink = mapLinkInput ? mapLinkInput.value.trim() : "";
+
+        let pickupBranchId = "";
+        let pickupBranchName = "";
 
         if (mode === "delivery") {
-            aptId = aptIdInput.value;
-            aptCode = aptCodeInput.value;
-
-            if (!aptId) { showToast("Please choose an apartment.", "error"); aptSearch.focus(); return; }
-            if (!selectedDivision) { showToast("Please select a division.", "error"); divisionSearch?.focus(); return; }
-
-            division = selectedDivision;
+            if (addrType === "individual_house") {
+                if (!fullAddr) { showToast("Your house address is missing.", "error"); return; }
+                aptId = "";
+                aptCode = "";
+                divLabel = "";
+                divCharge = 0;
+            } else {
+                if (!aptId) { showToast("Please choose an apartment.", "error"); aptSearch?.focus(); return; }
+                if (!divLabel) { showToast("Please select a division.", "error"); divisionSearch?.focus(); return; }
+                fullAddr = "";
+                mapLink = "";
+            }
         } else {
             if (!pickupBranchSelect || !pickupBranchSelect.value) {
                 showToast("Please select a pickup branch.", "error");
@@ -587,10 +488,18 @@
             pickupBranchId = pickupBranchSelect.value;
             const opt = pickupBranchSelect.options[pickupBranchSelect.selectedIndex];
             pickupBranchName = opt ? (opt.dataset.name || opt.textContent.trim()) : "";
+
+            addrType = "pickup";
+            aptId = "";
+            aptCode = "";
+            divLabel = "";
+            divCharge = 0;
+            fullAddr = "";
+            mapLink = "";
         }
 
         /* Totals */
-        const delivery = (mode === "pickup") ? 0 : Math.round(Number(deliveryCharge || 0));
+        const delivery = (mode === "pickup") ? 0 : Math.round(Number(divCharge || 0));
         const tax = calcTax(subtotal);
 
         let foodPlusDelivery;
@@ -600,7 +509,6 @@
             foodPlusDelivery = subtotal + delivery;
         }
 
-        /* Wallet covers entire bill */
         const walletUsable = Math.max(0, Math.min(walletBalance, foodPlusDelivery));
         const payable = Math.max(0, foodPlusDelivery - walletUsable);
 
@@ -608,22 +516,24 @@
             customer_name: name,
             customer_mobile: mobile,
             delivery_mode: mode,
+            address_type: addrType,
             apartment_id: aptId,
             apartment_code: aptCode,
-            division: division,
+            division: divLabel,
             division_charge: delivery,
+            full_address: fullAddr,
+            map_link: mapLink,
             pickup_branch_id: pickupBranchId,
             pickup_branch_name: pickupBranchName,
             wallet_applied: walletUsable,
             container_amount: containerTotal,
-            total: foodPlusDelivery
+            total: foodPlusDelivery,
         };
 
-        /* Wallet fully covers bill → place directly */
+        /* Fully covered by wallet → place directly */
         if (payable <= 0) {
             payNowBtn.disabled = true;
             payNowText.textContent = "Placing...";
-
             orderPayload.razorpay_payment_id = "WALLET-" + Date.now();
             finalizeOrder(orderPayload);
             return;
@@ -641,9 +551,7 @@
                 orderPayload.razorpay_payment_id = response.razorpay_payment_id;
                 finalizeOrder(orderPayload);
             },
-            modal: {
-                ondismiss: function () { showToast("Payment cancelled."); }
-            }
+            modal: { ondismiss: function () { showToast("Payment cancelled."); } }
         };
 
         try {
@@ -654,9 +562,6 @@
         }
     });
 
-    /* =========================================================
-       FINALIZE ORDER
-       ========================================================= */
     function finalizeOrder(payload) {
         payNowBtn.disabled = true;
         payNowText.textContent = "Processing...";
@@ -678,9 +583,7 @@
                     return;
                 }
                 showToast("Order placed successfully!");
-                setTimeout(() => {
-                    window.location.href = MAIN_URL + "my-orders.php";
-                }, 900);
+                setTimeout(() => { window.location.href = MAIN_URL + "my-orders.php"; }, 900);
             })
             .catch(() => {
                 showToast("Unable to connect.", "error");

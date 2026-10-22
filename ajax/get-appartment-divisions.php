@@ -2,6 +2,9 @@
 /* =========================================================
    MRS MILL@ — GET APARTMENTS + DIVISIONS (for register popup)
    File: ./ajax/get-appartment-divisions.php
+   Returns divisions normalized to BOTH shapes so the frontend
+   can always read block/door_no/floor. Legacy `division` rows
+   are mapped into door_no automatically.
    ========================================================= */
 
 require_once __DIR__ . '/../config/config.php';
@@ -20,15 +23,39 @@ try {
 
     $out = [];
     foreach ($rows as $r) {
+
         $divs = json_decode($r['divisions'] ?? '[]', true);
         if (!is_array($divs)) $divs = [];
 
         $clean = [];
         foreach ($divs as $d) {
-            if (!isset($d['division'])) continue;
+
+            if (!is_array($d)) continue;
+
+            /* New shape */
+            $block  = isset($d['block'])   ? (string)$d['block']   : '';
+            $doorNo = isset($d['door_no']) ? (string)$d['door_no'] : '';
+            $floor  = isset($d['floor'])   ? (string)$d['floor']   : '';
+            $charge = (float)($d['charge'] ?? 0);
+
+            /* Legacy shape fallback */
+            if ($block === '' && $doorNo === '' && $floor === '') {
+                if (isset($d['division'])) {
+                    $doorNo = (string)$d['division'];
+                } else {
+                    continue;
+                }
+            }
+
+            /* Emit BOTH shapes so old and new frontend code both work */
             $clean[] = [
-                'division' => (string)$d['division'],
-                'charge'   => (float)($d['charge'] ?? 0)
+                'block'    => $block,
+                'door_no'  => $doorNo,
+                'floor'    => $floor,
+                'charge'   => $charge,
+
+                /* Keep legacy key so nothing that still reads `division` breaks */
+                'division' => $doorNo
             ];
         }
 
@@ -42,6 +69,7 @@ try {
     }
 
     jsonResponse(true, 'OK', $out);
+
 } catch (PDOException $e) {
-    jsonResponse(false, 'Failed to load apartments.');
+    jsonResponse(false, 'Failed to load apartments: ' . $e->getMessage());
 }

@@ -1,8 +1,17 @@
 <?php
 /* =========================================================
    MRS MILL@ — PLACE ORDER
-   Wallet can cover food + tax + delivery.
-   Container deposit is tracked but NOT added to total_amount.
+   File: ./ajax/checkout-place-order.php
+
+   Orders schema (current):
+     customer_id         varchar(20)   MRSMCxxxxx
+     address_type        enum('apartment','individual_house','pickup')
+     address_json        longtext      JSON blob
+
+   order_containers.customer_id  → int(11)  (customers.id)
+
+   Wallet covers food + tax + delivery.
+   Container deposit tracked but NOT added to total_amount.
    ========================================================= */
 
 require_once __DIR__ . '/../config/config.php';
@@ -14,15 +23,36 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     jsonResponse(false, 'Method not allowed.');
 }
 
+/* ---------- PRE-DECLARE every variable that will be used in jsonResponse ---------- */
+$orderId         = 0;
+$orderCode       = '';
+$customerCode    = '';
+$addressType     = 'apartment';
+$deliveryMode    = 'delivery';
+$subtotal        = 0.0;
+$taxAmount       = 0.0;
+$taxRate         = 0.0;
+$taxType         = 'exclusive';
+$grossTotal      = 0.0;
+$walletApplied   = 0.0;
+$totalContainers = 0;
+$containerAmount = 0.0;
+$deliveryBoyId   = null;
+
 /* ---------- INPUT ---------- */
 $payment_id       = trim($_POST['razorpay_payment_id'] ?? '');
-$name             = trim($_POST['customer_name'] ?? '');
-$mobile           = trim($_POST['customer_mobile'] ?? '');
-$deliveryMode     = trim($_POST['delivery_mode'] ?? 'delivery');
-$apartmentId      = (int)($_POST['apartment_id'] ?? 0);
-$apartmentCode    = trim($_POST['apartment_code'] ?? '');
-$division         = trim($_POST['division'] ?? '');
+$name             = trim($_POST['customer_name']     ?? '');
+$mobile           = trim($_POST['customer_mobile']   ?? '');
+$deliveryMode     = trim($_POST['delivery_mode']     ?? 'delivery');
+$addressType      = trim($_POST['address_type']      ?? 'apartment');
+
+$apartmentId      = (int)($_POST['apartment_id']     ?? 0);
+$apartmentCode    = trim($_POST['apartment_code']    ?? '');
+$division         = trim($_POST['division']          ?? '');
 $divisionCharge   = (float)($_POST['division_charge'] ?? 0);
+$fullAddress      = trim($_POST['full_address']      ?? '');
+$mapLink          = trim($_POST['map_link']          ?? '');
+
 $pickupBranchId   = (int)($_POST['pickup_branch_id'] ?? 0);
 $pickupBranchName = trim($_POST['pickup_branch_name'] ?? '');
 $walletRequested  = (float)($_POST['wallet_applied'] ?? 0);
@@ -30,323 +60,317 @@ $walletRequested  = (float)($_POST['wallet_applied'] ?? 0);
 if ($name === '' || !preg_match('/^[0-9]{10,15}$/', $mobile)) {
     jsonResponse(false, 'Invalid customer details.');
 }
-if (!in_array($deliveryMode, ['delivery', 'pickup'], true)) $deliveryMode = 'delivery';
+if (!in_array($deliveryMode, ['delivery', 'pickup'], true))            $deliveryMode = 'delivery';
+if (!in_array($addressType,  ['apartment', 'individual_house'], true)) $addressType  = 'apartment';
 
 /* ---------- CUSTOMER ---------- */
-$customerId = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0
+$customerRowId = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0
     ? (int)$_SESSION['customer_id']
     : 0;
 
-/* ---------- DEFAULTS ---------- */
-$items           = [];
-$subtotal        = 0.0;
-$totalContainers = 0;
-$containerAmount = 0.0;
-
-$orderId     = 0;
-$orderCode   = '';
-$grossTotal  = 0.0;
-$apartmentName = '';
-
-$taxAmount = 0.0;
-$taxRate   = 0.0;
-$taxType   = 'exclusive';
-
-$walletApplied = 0.0;
-$walletBalance = 0.0;
-$walletBefore  = 0.0;
-$walletAfter   = 0.0;
-
-$deliveryBoyId  = null;
-$activeMenuCode = null;
-$hasOrderItems  = false;
-$paymentStatus  = 'unpaid';
+if ($customerRowId > 0) {
+    try {
+        $cs = $pdo->prepare("SELECT customer_id FROM customers WHERE id = ? LIMIT 1");
+        $cs->execute([$customerRowId]);
+        $customerCode = (string)$cs->fetchColumn();
+    } catch (PDOException $e) {
+        $customerCode = '';
+    }
+}
+if ($customerCode === '') {
+    jsonResponse(false, 'You must be logged in to place an order.');
+}
 
 /* ---------- LOAD CART ---------- */
 $cartItems = [];
-
 try {
-    if ($customerId > 0) {
-        $stmt = $pdo->prepare(
-            "SELECT menu_code,
-                    product_id, product_code AS code, product_name AS name,
-                    product_image AS image,
-                    variant_id, variant_name, variant_qty,
-                    price, qty
-             FROM customer_cart
-             WHERE customer_id = ?
-             ORDER BY id ASC"
-        );
-        $stmt->execute([$customerId]);
-        $cartItems = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } else {
-        if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
-            $cartItems = array_values($_SESSION['cart']);
-        }
-    }
+    $stmt = $pdo->prepare(
+        "SELECT menu_code, product_id, product_code AS code, product_name AS name,
+                product_image AS image, variant_id, variant_name, variant_qty,
+                price, qty
+         FROM customer_cart WHERE customer_id = ? ORDER BY id ASC"
+    );
+    $stmt->execute([$customerRowId]);
+    $cartItems = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     $cartItems = [];
 }
-
 if (empty($cartItems)) {
     jsonResponse(false, 'Cart is empty.');
 }
 
-/* ---------- Ensure schema ---------- */
-try {
-    $pdo->exec("ALTER TABLE customers ADD COLUMN wallet_balance DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER division_charge");
-} catch (PDOException $e) {}
+/* ---------- BUILD ADDRESS JSON + resolved details ---------- */
+$addressJson           = [];
+$apartmentName         = '';
+$resolvedCode          = '';
+$divisionChargeForCalc = 0.0;
 
-try {
-    $pdo->exec("CREATE TABLE IF NOT EXISTS customer_wallet_transactions (
-        id INT(11) NOT NULL AUTO_INCREMENT,
-        customer_id INT(11) NOT NULL,
-        customer_name VARCHAR(150) NOT NULL,
-        customer_mobile VARCHAR(30) NOT NULL,
-        txn_code VARCHAR(30) NOT NULL,
-        txn_type ENUM('credit','debit') NOT NULL,
-        amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-        balance_before DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-        balance_after DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-        source ENUM('admin','staff','system','order','refund') NOT NULL DEFAULT 'admin',
-        note VARCHAR(255) DEFAULT NULL,
-        created_by_id INT(11) DEFAULT NULL,
-        created_by_name VARCHAR(150) DEFAULT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(),
-        PRIMARY KEY (id),
-        UNIQUE KEY txn_code (txn_code),
-        KEY customer_id (customer_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci");
-} catch (PDOException $e) {}
+if ($deliveryMode === 'delivery') {
 
-try {
-    $pdo->exec("CREATE TABLE IF NOT EXISTS order_containers (
-        id INT(11) NOT NULL AUTO_INCREMENT,
-        order_id INT(11) NOT NULL,
-        customer_id INT(11) DEFAULT NULL,
-        total_containers INT(11) NOT NULL DEFAULT 0,
-        received_containers INT(11) NOT NULL DEFAULT 0,
-        container_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-        status ENUM('not_received','partial','received') NOT NULL DEFAULT 'not_received',
-        received_at DATETIME DEFAULT NULL,
-        received_by_id INT(11) DEFAULT NULL,
-        received_by_name VARCHAR(150) DEFAULT NULL,
-        note VARCHAR(255) DEFAULT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP(),
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),
-        PRIMARY KEY (id),
-        UNIQUE KEY order_unique (order_id),
-        KEY customer_id (customer_id),
-        KEY status (status)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci");
-} catch (PDOException $e) {}
+    if ($addressType === 'individual_house') {
 
-/* =========================================================
-   MAIN FLOW
-   ========================================================= */
-try {
-    /* ---------- Address / Pickup validation ---------- */
-    if ($deliveryMode === 'delivery') {
+        /* ---------- INDIVIDUAL HOUSE ---------- */
+        if ($fullAddress === '') jsonResponse(false, 'Address is missing for this order.');
+
+        $houseImage = '';
+        try {
+            $ci = $pdo->prepare("SELECT address_json FROM customers WHERE id = ? LIMIT 1");
+            $ci->execute([$customerRowId]);
+            $addr = json_decode((string)$ci->fetchColumn(), true);
+            if (is_array($addr) && !empty($addr['house_image'])) {
+                $houseImage = $addr['house_image'];
+            }
+        } catch (PDOException $e) {}
+
+        $addressJson = [
+            'full_address' => $fullAddress,
+            'map_link'     => $mapLink,
+            'house_image'  => $houseImage,
+        ];
+
+        $resolvedCode = 'IH_' . substr(md5(trim($fullAddress)), 0, 12);
+
+        /* reset apartment fields */
+        $apartmentId           = 0;
+        $apartmentCode         = '';
+        $apartmentName         = '';
+        $division              = '';
+        $divisionCharge        = 0;
+        $divisionChargeForCalc = 0;
+
+    } else {
+
+        /* ---------- APARTMENT ---------- */
         if ($apartmentId <= 0 || $division === '') {
             jsonResponse(false, 'Invalid apartment or division.');
         }
 
         $aStmt = $pdo->prepare(
-            "SELECT apartment_code, apartment_name
-             FROM apartments WHERE id = ? LIMIT 1"
+            "SELECT apartment_code, apartment_name FROM apartments WHERE id = ? LIMIT 1"
         );
         $aStmt->execute([$apartmentId]);
         $apt = $aStmt->fetch(PDO::FETCH_ASSOC);
         if (!$apt) jsonResponse(false, 'Apartment not found.');
 
-        $apartmentName = $apt['apartment_name'];
         $apartmentCode = $apt['apartment_code'];
+        $apartmentName = $apt['apartment_name'];
 
-        $pickupBranchId   = 0;
-        $pickupBranchName = '';
-
-    } else {
-        $apartmentId    = 0;
-        $apartmentCode  = '';
-        $apartmentName  = '';
-        $division       = '';
-        $divisionCharge = 0;
-
-        if ($pickupBranchId <= 0) jsonResponse(false, 'Please select a pickup branch.');
-
-        $bStmt = $pdo->prepare("SELECT branch_name FROM settings_branches WHERE id = ? LIMIT 1");
-        $bStmt->execute([$pickupBranchId]);
-        $branchRow = $bStmt->fetch(PDO::FETCH_ASSOC);
-        if (!$branchRow) jsonResponse(false, 'Invalid pickup branch.');
-
-        $pickupBranchName = $branchRow['branch_name'];
-    }
-
-    /* ---------- Auto-assign delivery boy ---------- */
-    if ($deliveryMode === 'delivery' && $apartmentCode !== '') {
-        try {
-            $dBoyStmt = $pdo->prepare(
-                "SELECT adb.delivery_boy_id
-                 FROM apartment_delivery_boys adb
-                 INNER JOIN delivery_boys db ON db.id = adb.delivery_boy_id
-                 WHERE adb.apartment_code = ?
-                   AND db.status = 1
-                 LIMIT 1"
-            );
-            $dBoyStmt->execute([$apartmentCode]);
-            $row = $dBoyStmt->fetch(PDO::FETCH_ASSOC);
-            if ($row) $deliveryBoyId = (int)$row['delivery_boy_id'];
-        } catch (PDOException $e) {}
-    }
-
-    /* ---------- Build items ---------- */
-    $items           = [];
-    $subtotal        = 0.0;
-    $totalContainers = 0;
-    $containerAmount = 0.0;
-
-    $vStmt = $pdo->prepare(
-        "SELECT container_enabled, container_price FROM product_variants WHERE id = ? LIMIT 1"
-    );
-
-    foreach ($cartItems as $c) {
-        $qty   = (int)($c['qty'] ?? 0);
-        $price = (float)($c['price'] ?? 0);
-        $line  = $price * $qty;
-        $subtotal += $line;
-
-        $containerEnabled = 0;
-        $containerPrice   = 0.0;
-        $lineContainerAmt = 0.0;
-
-        if (!empty($c['variant_id'])) {
-            $vStmt->execute([(int)$c['variant_id']]);
-            $v = $vStmt->fetch(PDO::FETCH_ASSOC);
-            if ($v && (int)$v['container_enabled'] === 1 && (float)$v['container_price'] > 0) {
-                $containerEnabled = 1;
-                $containerPrice   = (float)$v['container_price'];
-                $lineContainerAmt = $containerPrice * $qty;
-
-                $totalContainers += $qty;
-                $containerAmount += $lineContainerAmt;
-            }
+        /* Parse block / door / floor from division label */
+        $block = ''; $door = ''; $floor = '';
+        foreach (array_map('trim', explode('/', $division)) as $p) {
+            if (stripos($p, 'Blk ')    === 0) $block = trim(substr($p, 4));
+            elseif (stripos($p, 'Door ') === 0) $door  = trim(substr($p, 5));
+            elseif (stripos($p, 'Fl ')   === 0) $floor = trim(substr($p, 3));
         }
 
-        $items[] = [
-            'menu_code'            => $c['menu_code'] ?? null,
-            'product_id'           => (int)($c['product_id'] ?? 0),
-            'code'                 => $c['code'] ?? '',
-            'name'                 => $c['name'] ?? '',
-            'image'                => $c['image'] ?? '',
-            'variant_id'           => (int)($c['variant_id'] ?? 0),
-            'variant_name'         => $c['variant_name'] ?? '',
-            'variant_qty'          => $c['variant_qty'] ?? '',
-            'price'                => $price,
-            'qty'                  => $qty,
-            'line_total'           => $line,
-            'container_enabled'    => $containerEnabled,
-            'container_price'      => $containerEnabled ? $containerPrice : 0,
-            'container_line_total' => $lineContainerAmt,
+        $addressJson = [
+            'apartment_id'   => $apartmentId,
+            'apartment_code' => $apartmentCode,
+            'apartment_name' => $apartmentName,
+            'block'          => $block,
+            'door_no'        => $door,
+            'floor'          => $floor,
+            'division_label' => $division,
+            'charge'         => $divisionCharge,
         ];
+
+        $resolvedCode          = $apartmentCode;
+        $divisionChargeForCalc = $divisionCharge;
     }
 
-    /* =========================================================
-       APPLY TAX
-       ========================================================= */
-    $settings  = getSettings($pdo);
-    $taxStatus = (int)($settings['tax_status'] ?? 0);
-    $taxRate   = (float)($settings['tax_rate'] ?? 0);
-    $taxType   = strtolower($settings['tax_type'] ?? 'exclusive');
+} else {
+    /* ---------- PICKUP ---------- */
+    if ($pickupBranchId <= 0) jsonResponse(false, 'Please select a pickup branch.');
 
-    if (!in_array($taxType, ['inclusive', 'exclusive'], true)) {
-        $taxType = 'exclusive';
-    }
+    $bStmt = $pdo->prepare("SELECT branch_name FROM settings_branches WHERE id = ? LIMIT 1");
+    $bStmt->execute([$pickupBranchId]);
+    $branchRow = $bStmt->fetch(PDO::FETCH_ASSOC);
+    if (!$branchRow) jsonResponse(false, 'Invalid pickup branch.');
 
-    $taxAmount        = 0.0;
-    $deliveryPortion  = ($deliveryMode === 'delivery') ? $divisionCharge : 0;
-    $foodPlusDelivery = 0.0;
+    $pickupBranchName = $branchRow['branch_name'];
 
-    if ($taxStatus === 1 && $taxRate > 0) {
-        if ($taxType === 'inclusive') {
-            $rawTax    = $subtotal - ($subtotal / (1 + ($taxRate / 100)));
-            $taxAmount = round($rawTax);
-            $foodPlusDelivery = $subtotal + $deliveryPortion;
-        } else {
-            $rawTax    = $subtotal * ($taxRate / 100);
-            $taxAmount = round($rawTax);
-            $foodPlusDelivery = $subtotal + $deliveryPortion + $taxAmount;
+    $addressJson = [
+        'branch_id'   => $pickupBranchId,
+        'branch_name' => $pickupBranchName,
+    ];
+
+    $addressType           = 'pickup';
+    $apartmentId           = 0;
+    $apartmentCode         = '';
+    $apartmentName         = '';
+    $division              = '';
+    $divisionCharge        = 0;
+    $divisionChargeForCalc = 0;
+    $resolvedCode          = '';
+}
+
+$addressJsonFinal = json_encode($addressJson, JSON_UNESCAPED_UNICODE);
+
+/* ---------- AUTO-ASSIGN DELIVERY BOY ---------- */
+if ($deliveryMode === 'delivery' && $resolvedCode !== '') {
+    try {
+        $dBoyStmt = $pdo->prepare(
+            "SELECT adb.delivery_boy_id
+             FROM apartment_delivery_boys adb
+             INNER JOIN delivery_boys db ON db.id = adb.delivery_boy_id
+             WHERE adb.apartment_code = ? AND db.status = 1
+             ORDER BY adb.id ASC
+             LIMIT 1"
+        );
+        $dBoyStmt->execute([$resolvedCode]);
+        $row = $dBoyStmt->fetch(PDO::FETCH_ASSOC);
+        if ($row) $deliveryBoyId = (int)$row['delivery_boy_id'];
+    } catch (PDOException $e) {}
+}
+
+/* ---------- BUILD ITEMS + CONTAINERS ---------- */
+$items           = [];
+$subtotal        = 0.0;
+$totalContainers = 0;
+$containerAmount = 0.0;
+
+$vStmt = $pdo->prepare(
+    "SELECT container_enabled, container_price FROM product_variants WHERE id = ? LIMIT 1"
+);
+
+foreach ($cartItems as $c) {
+    $qty   = (int)($c['qty'] ?? 0);
+    $price = (float)($c['price'] ?? 0);
+    $line  = $price * $qty;
+    $subtotal += $line;
+
+    $containerEnabled = 0;
+    $containerPrice   = 0.0;
+    $lineContainerAmt = 0.0;
+
+    if (!empty($c['variant_id'])) {
+        $vStmt->execute([(int)$c['variant_id']]);
+        $v = $vStmt->fetch(PDO::FETCH_ASSOC);
+        if ($v && (int)$v['container_enabled'] === 1 && (float)$v['container_price'] > 0) {
+            $containerEnabled = 1;
+            $containerPrice   = (float)$v['container_price'];
+            $lineContainerAmt = $containerPrice * $qty;
+            $totalContainers += $qty;
+            $containerAmount += $lineContainerAmt;
         }
-    } else {
-        $taxRate   = 0.0;
-        $taxAmount = 0.0;
+    }
+
+    $items[] = [
+        'menu_code'            => $c['menu_code'] ?? null,
+        'product_id'           => (int)($c['product_id'] ?? 0),
+        'code'                 => $c['code'] ?? '',
+        'name'                 => $c['name'] ?? '',
+        'image'                => $c['image'] ?? '',
+        'variant_id'           => (int)($c['variant_id'] ?? 0),
+        'variant_name'         => $c['variant_name'] ?? '',
+        'variant_qty'          => $c['variant_qty'] ?? '',
+        'price'                => $price,
+        'qty'                  => $qty,
+        'line_total'           => $line,
+        'container_enabled'    => $containerEnabled,
+        'container_price'      => $containerEnabled ? $containerPrice : 0,
+        'container_line_total' => $lineContainerAmt,
+    ];
+}
+
+/* ---------- TAX ---------- */
+$settings  = getSettings($pdo);
+$taxStatus = (int)($settings['tax_status'] ?? 0);
+$taxRate   = (float)($settings['tax_rate'] ?? 0);
+$taxType   = strtolower($settings['tax_type'] ?? 'exclusive');
+if (!in_array($taxType, ['inclusive', 'exclusive'], true)) $taxType = 'exclusive';
+
+$taxAmount        = 0.0;
+$deliveryPortion  = ($deliveryMode === 'delivery') ? $divisionChargeForCalc : 0;
+$foodPlusDelivery = 0.0;
+
+if ($taxStatus === 1 && $taxRate > 0) {
+    if ($taxType === 'inclusive') {
+        $taxAmount        = round($subtotal - ($subtotal / (1 + ($taxRate / 100))));
         $foodPlusDelivery = $subtotal + $deliveryPortion;
+    } else {
+        $taxAmount        = round($subtotal * ($taxRate / 100));
+        $foodPlusDelivery = $subtotal + $deliveryPortion + $taxAmount;
     }
+} else {
+    $taxRate          = 0.0;
+    $taxAmount        = 0.0;
+    $foodPlusDelivery = $subtotal + $deliveryPortion;
+}
 
-    $foodPlusDelivery = round($foodPlusDelivery);
-    $grossTotal       = $foodPlusDelivery;
+$foodPlusDelivery = round($foodPlusDelivery);
+$grossTotal       = $foodPlusDelivery;
 
-    /* =========================================================
-       WALLET — can cover entire bill (food + tax + delivery)
-       ========================================================= */
-    if ($customerId > 0) {
-        $wStmt = $pdo->prepare(
-            "SELECT wallet_balance FROM customers WHERE id = ? LIMIT 1 FOR UPDATE"
-        );
-        $wStmt->execute([$customerId]);
-        $walletBalance = (float)$wStmt->fetchColumn();
+/* ---------- WALLET ---------- */
+$walletApplied = 0.0;
+$walletBalance = 0.0;
+$walletBefore  = 0.0;
+$walletAfter   = 0.0;
 
-        /* Cap by requested, balance, and the entire bill */
-        $walletApplied = min($walletRequested, $walletBalance, $foodPlusDelivery);
-        if ($walletApplied < 0) $walletApplied = 0;
-
-        $walletBefore = $walletBalance;
-        $walletAfter  = $walletBalance - $walletApplied;
-    }
-
-    /* ---------- Order code ---------- */
-    $last = $pdo->query("SELECT order_code FROM orders ORDER BY id DESC LIMIT 1")->fetchColumn();
-    $nextNum = 1;
-    if ($last && preg_match('/(\d+)$/', $last, $m)) {
-        $nextNum = (int)$m[1] + 1;
-    }
-    $orderCode = 'ORD' . str_pad((string)$nextNum, 6, '0', STR_PAD_LEFT);
-
-    /* ---------- Active menu fallback ---------- */
-    try {
-        $mStmt = $pdo->query(
-            "SELECT menu_code FROM menus
-             WHERE status = 1 AND start_at <= NOW() AND end_at >= NOW()
-             ORDER BY start_at DESC LIMIT 1"
-        );
-        $activeMenuCode = $mStmt->fetchColumn() ?: null;
-    } catch (PDOException $e) {}
-
-    $stockStmt = $pdo->prepare(
-        "UPDATE menu_products
-         SET stock_count = GREATEST(stock_count - ?, 0)
-         WHERE menu_code = ? AND variant_id = ? AND stock_unlimited = 0"
+if ($customerRowId > 0) {
+    $wStmt = $pdo->prepare(
+        "SELECT wallet_balance FROM customers WHERE id = ? LIMIT 1 FOR UPDATE"
     );
+    $wStmt->execute([$customerRowId]);
+    $walletBalance = (float)$wStmt->fetchColumn();
 
-    try {
-        $tblCheck = $pdo->query("SHOW TABLES LIKE 'order_items'");
-        $hasOrderItems = (bool)$tblCheck->fetchColumn();
-    } catch (PDOException $e) {}
+    $walletApplied = min($walletRequested, $walletBalance, $foodPlusDelivery);
+    if ($walletApplied < 0) $walletApplied = 0;
 
-    $paymentStatus = !empty($payment_id) ? 'paid' : 'unpaid';
+    $walletBefore = $walletBalance;
+    $walletAfter  = $walletBalance - $walletApplied;
+}
 
-    /* ---------- TRANSACTION ---------- */
+/* ---------- ORDER CODE ---------- */
+$last = $pdo->query("SELECT order_code FROM orders ORDER BY id DESC LIMIT 1")->fetchColumn();
+$nextNum = 1;
+if ($last && preg_match('/(\d+)$/', $last, $m)) $nextNum = (int)$m[1] + 1;
+$orderCode = 'ORD' . str_pad((string)$nextNum, 6, '0', STR_PAD_LEFT);
+
+/* ---------- ACTIVE MENU FALLBACK ---------- */
+$activeMenuCode = null;
+try {
+    $mStmt = $pdo->query(
+        "SELECT menu_code FROM menus
+         WHERE status = 1 AND start_at <= NOW() AND end_at >= NOW()
+         ORDER BY start_at DESC LIMIT 1"
+    );
+    $activeMenuCode = $mStmt->fetchColumn() ?: null;
+} catch (PDOException $e) {}
+
+$stockStmt = $pdo->prepare(
+    "UPDATE menu_products
+     SET stock_count = GREATEST(stock_count - ?, 0)
+     WHERE menu_code = ? AND variant_id = ? AND stock_unlimited = 0"
+);
+
+/* order_items table optional */
+$hasOrderItems = false;
+try {
+    $tblCheck = $pdo->query("SHOW TABLES LIKE 'order_items'");
+    $hasOrderItems = (bool)$tblCheck->fetchColumn();
+} catch (PDOException $e) {
+    $hasOrderItems = false;
+}
+
+$paymentStatus = !empty($payment_id) ? 'paid' : 'unpaid';
+
+/* =========================================================
+   TRANSACTION
+   ========================================================= */
+try {
+
     $pdo->beginTransaction();
 
     /* Deduct wallet */
-    if ($walletApplied > 0 && $customerId > 0) {
+    if ($walletApplied > 0 && $customerRowId > 0) {
         $updW = $pdo->prepare(
             "UPDATE customers SET wallet_balance = ?, updated_at = NOW() WHERE id = ?"
         );
-        $updW->execute([$walletAfter, $customerId]);
+        $updW->execute([$walletAfter, $customerRowId]);
 
         try {
             $txnCode = 'TXN' . date('ymd') . str_pad((string)random_int(1, 9999), 4, '0', STR_PAD_LEFT);
-
             $logW = $pdo->prepare(
                 "INSERT INTO customer_wallet_transactions
                     (customer_id, customer_name, customer_mobile, txn_code,
@@ -355,7 +379,7 @@ try {
                  VALUES (?, ?, ?, ?, 'debit', ?, ?, ?, 'order', ?, ?, ?, NOW())"
             );
             $logW->execute([
-                $customerId,
+                $customerRowId,
                 $name,
                 $mobile,
                 $txnCode,
@@ -363,59 +387,58 @@ try {
                 $walletBefore,
                 $walletAfter,
                 'Order ' . $orderCode . ' — wallet payment',
-                $customerId,
-                $name
+                $customerRowId,
+                $name,
             ]);
         } catch (PDOException $e) {}
     }
 
-    /* Insert order */
+    /* Insert order — uses ONLY real columns */
     $ins = $pdo->prepare(
         "INSERT INTO orders
-            (order_code, delivery_boy_id, customer_name, customer_mobile,
-             apartment_id, apartment_code, apartment_name,
-             division, division_charge,
-             tax_amount, tax_rate, tax_type,
+            (order_code, customer_id, delivery_boy_id,
+             address_type, address_json,
              delivery_mode,
              pickup_branch_id, pickup_branch_name,
-             subtotal, total_amount,
-             products_json, status, delivery_status, payment_status, payment_ref, paid_at)
+             division_charge,
+             tax_amount, tax_rate, tax_type,
+             subtotal, total_amount, products_json,
+             status, delivery_status, payment_status, payment_ref, paid_at, created_at)
          VALUES
-            (?, ?, ?, ?,
-             ?, ?, ?,
+            (?, ?, ?,
              ?, ?,
-             ?, ?, ?,
              ?,
              ?, ?,
-             ?, ?,
-             ?, 'pending', 'disabled', ?, ?, NOW())"
+             ?,
+             ?, ?, ?,
+             ?, ?, ?,
+             'pending', 'disabled', ?, ?, ?, NOW())"
     );
 
     $ins->execute([
         $orderCode,
+        $customerCode,           // varchar MRSMCxxxxx
         $deliveryBoyId,
-        $name,
-        $mobile,
-        $apartmentId > 0 ? $apartmentId : null,
-        $apartmentCode,
-        $apartmentName,
-        $division,
-        $divisionCharge,
-        $taxAmount,
-        $taxRate,
-        $taxType,
+        $addressType,            // 'apartment' | 'individual_house' | 'pickup'
+        $addressJsonFinal,
         $deliveryMode,
         $pickupBranchId > 0 ? $pickupBranchId : null,
         $pickupBranchName !== '' ? $pickupBranchName : null,
+        $divisionChargeForCalc,
+        $taxAmount,
+        $taxRate,
+        $taxType,
         $subtotal,
         $grossTotal,
         json_encode($items, JSON_UNESCAPED_UNICODE),
         $paymentStatus,
-        $payment_id
+        $payment_id !== '' ? $payment_id : null,
+        $paymentStatus === 'paid' ? date('Y-m-d H:i:s') : null,
     ]);
 
     $orderId = (int)$pdo->lastInsertId();
 
+    /* Optional order_items insert */
     $itemInsert = null;
     if ($hasOrderItems) {
         $itemInsert = $pdo->prepare(
@@ -426,6 +449,7 @@ try {
         );
     }
 
+    /* Loop items: reduce stock + optional order_items */
     foreach ($items as $it) {
         if ($it['variant_id'] > 0 && $it['qty'] > 0) {
             $menuForLine = $it['menu_code'] ?: $activeMenuCode;
@@ -447,13 +471,13 @@ try {
                     $it['variant_qty'],
                     $it['price'],
                     $it['qty'],
-                    $it['line_total']
+                    $it['line_total'],
                 ]);
             } catch (PDOException $e) {}
         }
     }
 
-    /* Insert container row */
+    /* Container row — customer_id is INT (customers.id) */
     if ($totalContainers > 0) {
         try {
             $cIns = $pdo->prepare(
@@ -464,18 +488,16 @@ try {
             );
             $cIns->execute([
                 $orderId,
-                $customerId > 0 ? $customerId : null,
+                $customerRowId,
                 $totalContainers,
-                $containerAmount
+                $containerAmount,
             ]);
         } catch (PDOException $e) {}
     }
 
     /* Clear cart */
-    if ($customerId > 0) {
-        $pdo->prepare("DELETE FROM customer_cart WHERE customer_id = ?")
-            ->execute([$customerId]);
-    }
+    $pdo->prepare("DELETE FROM customer_cart WHERE customer_id = ?")
+        ->execute([$customerRowId]);
     $_SESSION['cart'] = [];
 
     $pdo->commit();
@@ -491,6 +513,8 @@ try {
 jsonResponse(true, 'Order placed.', [
     'order_id'         => $orderId,
     'order_code'       => $orderCode,
+    'customer_code'    => $customerCode,
+    'address_type'     => $addressType,
     'subtotal'         => $subtotal,
     'tax_amount'       => $taxAmount,
     'tax_rate'         => $taxRate,
@@ -499,5 +523,6 @@ jsonResponse(true, 'Order placed.', [
     'wallet_applied'   => $walletApplied,
     'container_count'  => $totalContainers,
     'container_amount' => $containerAmount,
-    'mode'             => $deliveryMode
+    'mode'             => $deliveryMode,
+    'delivery_boy_id'  => $deliveryBoyId,
 ]);

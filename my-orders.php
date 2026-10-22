@@ -9,7 +9,7 @@ $logoUrl  = !empty($settings['logo_image'])    ? ADMIN_URL . $settings['logo_ima
 $favicon  = !empty($settings['favicon_image']) ? ADMIN_URL . $settings['favicon_image'] : '';
 
 /* =========================================================
-   AUTH — must be logged in
+   AUTH
    ========================================================= */
 $customerLoggedIn = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0;
 
@@ -18,9 +18,21 @@ if (!$customerLoggedIn) {
     exit;
 }
 
-$customerId     = (int)$_SESSION['customer_id'];
-$customerName   = $_SESSION['customer_name']   ?? '';
+$customerRowId = (int)$_SESSION['customer_id'];         // customers.id (int)
+$customerName  = $_SESSION['customer_name']   ?? '';
 $customerMobile = $_SESSION['customer_mobile'] ?? '';
+
+/* Fetch customer_code (MRSMCxxxxx) — that's what `orders.customer_id` stores */
+$customerCode = (string)($_SESSION['customer_code'] ?? '');
+if ($customerCode === '') {
+    try {
+        $cs = $pdo->prepare("SELECT customer_id FROM customers WHERE id = ? LIMIT 1");
+        $cs->execute([$customerRowId]);
+        $customerCode = (string)$cs->fetchColumn();
+        if ($customerCode !== '') $_SESSION['customer_code'] = $customerCode;
+    } catch (PDOException $e) {
+    }
+}
 
 /* =========================================================
    FILTERS
@@ -30,60 +42,72 @@ if (!in_array($filter, ['all', 'pending', 'confirmed', 'delivered', 'cancelled']
     $filter = 'all';
 }
 
-$page = max(1, (int)($_GET['page'] ?? 1));
+$page    = max(1, (int)($_GET['page'] ?? 1));
 $perPage = 10;
 $offset  = ($page - 1) * $perPage;
 
 $filterWhere = "";
 if ($filter !== 'all') {
-    $filterWhere = " AND status = " . $pdo->quote($filter);
+    $filterWhere = " AND o.status = " . $pdo->quote($filter);
 }
 
 /* =========================================================
-   LOAD ORDERS (with delivery boy)
+   LOAD ORDERS — filtered by orders.customer_id = MRSMCxxxxx
    ========================================================= */
-$orders = [];
+$orders      = [];
 $totalOrders = 0;
 $totalPages  = 1;
 
 try {
-    /* Count */
     $cStmt = $pdo->prepare(
-        "SELECT COUNT(*) FROM orders
-         WHERE customer_mobile = ? $filterWhere"
+        "SELECT COUNT(*) FROM orders o
+         WHERE o.customer_id = ? $filterWhere"
     );
-    $cStmt->execute([$customerMobile]);
+    $cStmt->execute([$customerCode]);
     $totalOrders = (int)$cStmt->fetchColumn();
     $totalPages  = max(1, (int)ceil($totalOrders / $perPage));
 
     if ($page > $totalPages) $page = $totalPages;
     $offset = ($page - 1) * $perPage;
 
-    /* Load orders with delivery boy */
     $stmt = $pdo->prepare(
-        "SELECT o.id, o.order_code, o.customer_name, o.customer_mobile,
-                o.apartment_name, o.division, o.delivery_mode,
-                o.pickup_branch_name,
-                o.subtotal, o.division_charge, o.tax_amount, o.tax_rate, o.tax_type,
-                o.total_amount, o.products_json, o.status, o.delivery_status,
-                o.payment_status, o.created_at,
+        "SELECT o.id, o.order_code, o.customer_id,
+                o.address_type, o.address_json,
+                o.delivery_mode,
+                o.pickup_branch_id, o.pickup_branch_name,
+                o.division_charge,
+                o.subtotal, o.tax_amount, o.tax_rate, o.tax_type,
+                o.total_amount, o.products_json,
+                o.status, o.delivery_status, o.payment_status,
+                o.created_at,
                 o.delivery_boy_id,
                 b.full_name     AS delivery_boy_name,
                 b.delivery_code AS delivery_boy_code
          FROM orders o
          LEFT JOIN delivery_boys b ON b.id = o.delivery_boy_id
-         WHERE o.customer_mobile = ? $filterWhere
+         WHERE o.customer_id = ? $filterWhere
          ORDER BY o.id DESC
          LIMIT $perPage OFFSET $offset"
     );
-    $stmt->execute([$customerMobile]);
+    $stmt->execute([$customerCode]);
     $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     $orders = [];
 }
 
+/* Decode address_json for each order once */
+foreach ($orders as &$o) {
+    $addr = [];
+    if (!empty($o['address_json'])) {
+        $decoded = json_decode($o['address_json'], true);
+        if (is_array($decoded)) $addr = $decoded;
+    }
+    $o['_addr'] = $addr;
+}
+unset($o);
+
 /* =========================================================
-   FILTER COUNTS (for tab badges)
+   FILTER COUNTS
    ========================================================= */
 $filterCounts = [
     'all'       => 0,
@@ -97,10 +121,10 @@ try {
     $rows = $pdo->prepare(
         "SELECT status, COUNT(*) AS cnt
          FROM orders
-         WHERE customer_mobile = ?
+         WHERE customer_id = ?
          GROUP BY status"
     );
-    $rows->execute([$customerMobile]);
+    $rows->execute([$customerCode]);
 
     while ($r = $rows->fetch(PDO::FETCH_ASSOC)) {
         $s = strtolower($r['status']);
@@ -132,7 +156,7 @@ function formatOrderDate($ts)
 
     if ($daysDiff === 0) return 'Today, ' . date('g:i A', $t);
     if ($daysDiff === 1) return 'Yesterday, ' . date('g:i A', $t);
-    if ($daysDiff < 7)  return $daysDiff . ' days ago';
+    if ($daysDiff < 7)   return $daysDiff . ' days ago';
     return date('d M Y, g:i A', $t);
 }
 
@@ -142,34 +166,15 @@ function statusMeta($status, $paymentStatus = '')
     $paymentStatus = strtolower($paymentStatus);
 
     if ($status === 'cancelled') {
-        return [
-            'label' => 'Cancelled',
-            'class' => 'cancelled',
-            'icon'  => 'bi-x-circle-fill'
-        ];
+        return ['label' => 'Cancelled', 'class' => 'cancelled', 'icon' => 'bi-x-circle-fill'];
     }
-
     if ($status === 'delivered') {
-        return [
-            'label' => 'Delivered',
-            'class' => 'delivered',
-            'icon'  => 'bi-check-circle-fill'
-        ];
+        return ['label' => 'Delivered', 'class' => 'delivered', 'icon' => 'bi-check-circle-fill'];
     }
-
     if ($status === 'processing' || $status === 'confirmed') {
-        return [
-            'label' => 'Confirmed',
-            'class' => 'confirmed',
-            'icon'  => 'bi-check-circle-fill'
-        ];
+        return ['label' => 'Confirmed', 'class' => 'confirmed', 'icon' => 'bi-check-circle-fill'];
     }
-
-    return [
-        'label' => 'Pending',
-        'class' => 'pending',
-        'icon'  => 'bi-clock-fill'
-    ];
+    return ['label' => 'Pending', 'class' => 'pending', 'icon' => 'bi-clock-fill'];
 }
 
 function paymentMeta($paymentStatus)
@@ -177,7 +182,7 @@ function paymentMeta($paymentStatus)
     $p = strtolower($paymentStatus);
     switch ($p) {
         case 'paid':
-            return ['label' => 'Paid', 'class' => 'paid'];
+            return ['label' => 'Paid',   'class' => 'paid'];
         case 'failed':
             return ['label' => 'Failed', 'class' => 'failed'];
         default:
@@ -185,14 +190,24 @@ function paymentMeta($paymentStatus)
     }
 }
 
-/* Cart */
+/* =========================================================
+   CART (for nav badge)
+   ========================================================= */
 $cartCount = 0;
 $cartTotal = 0;
-if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
-    foreach ($_SESSION['cart'] as $c) {
-        $qty = (int)($c['qty'] ?? 0);
-        $cartCount += $qty;
-        $cartTotal += ((float)($c['price'] ?? 0)) * $qty;
+
+if ($customerRowId > 0) {
+    try {
+        $cc = $pdo->prepare(
+            "SELECT COALESCE(SUM(qty),0) AS c,
+                    COALESCE(SUM(price * qty),0) AS t
+             FROM customer_cart WHERE customer_id = ?"
+        );
+        $cc->execute([$customerRowId]);
+        $r = $cc->fetch(PDO::FETCH_ASSOC);
+        $cartCount = (int)($r['c'] ?? 0);
+        $cartTotal = (float)($r['t'] ?? 0);
+    } catch (PDOException $e) {
     }
 }
 ?>
@@ -203,9 +218,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
     <?php include_once './includes/head_links.php'; ?>
 
     <style>
-        /* =====================================================
-           MY ORDERS PAGE
-           ===================================================== */
         .mo-page {
             padding: 26px 0 80px;
         }
@@ -283,7 +295,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             color: #302923;
         }
 
-        /* ---------- FILTER TABS ---------- */
         .mo-tabs {
             display: flex;
             gap: 6px;
@@ -296,7 +307,9 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             scrollbar-width: none;
         }
 
-        .mo-tabs::-webkit-scrollbar { display: none; }
+        .mo-tabs::-webkit-scrollbar {
+            display: none;
+        }
 
         .mo-tab {
             display: inline-flex;
@@ -342,7 +355,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             color: #fff;
         }
 
-        /* ---------- ORDER CARDS ---------- */
         .mo-list {
             display: flex;
             flex-direction: column;
@@ -446,11 +458,21 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             text-transform: uppercase;
         }
 
-        .mo-pay.paid    { background: #e8f6ea; color: #1b5e20; }
-        .mo-pay.unpaid  { background: #fff7e7; color: #a35a0e; }
-        .mo-pay.failed  { background: #fdecec; color: #b51f2c; }
+        .mo-pay.paid {
+            background: #e8f6ea;
+            color: #1b5e20;
+        }
 
-        /* ---------- ORDER BODY ---------- */
+        .mo-pay.unpaid {
+            background: #fff7e7;
+            color: #a35a0e;
+        }
+
+        .mo-pay.failed {
+            background: #fdecec;
+            color: #b51f2c;
+        }
+
         .mo-order-body {
             padding: 18px 20px;
         }
@@ -522,7 +544,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             white-space: nowrap;
         }
 
-        /* ---------- ORDER FOOTER ---------- */
         .mo-order-foot {
             display: flex;
             align-items: center;
@@ -554,7 +575,21 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             font-size: 13px;
         }
 
-        /* ---------- DELIVERY BOY CHIP ---------- */
+        /* Individual-house address badge */
+        .mo-ih-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            background: #eef7f0;
+            color: #2e7d32;
+            padding: 3px 9px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+        }
+
         .mo-dboy {
             display: inline-flex;
             align-items: center;
@@ -655,7 +690,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             margin-left: 6px;
         }
 
-        /* ---------- EMPTY STATE ---------- */
         .mo-empty {
             padding: 80px 24px;
             text-align: center;
@@ -692,7 +726,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             line-height: 1.6;
         }
 
-        /* ---------- PAGINATION ---------- */
         .mo-pagination {
             display: flex;
             justify-content: center;
@@ -735,14 +768,32 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             pointer-events: none;
         }
 
-        /* ---------- RESPONSIVE ---------- */
         @media (max-width: 640px) {
-            .mo-head h1 { font-size: 24px; }
-            .mo-order-head { padding: 14px 16px; }
-            .mo-order-body { padding: 14px 16px; }
-            .mo-order-foot { padding: 12px 16px; }
-            .mo-total-line { margin-left: 0; width: 100%; justify-content: space-between; }
-            .mo-meta { gap: 12px; }
+            .mo-head h1 {
+                font-size: 24px;
+            }
+
+            .mo-order-head {
+                padding: 14px 16px;
+            }
+
+            .mo-order-body {
+                padding: 14px 16px;
+            }
+
+            .mo-order-foot {
+                padding: 12px 16px;
+            }
+
+            .mo-total-line {
+                margin-left: 0;
+                width: 100%;
+                justify-content: space-between;
+            }
+
+            .mo-meta {
+                gap: 12px;
+            }
         }
     </style>
 </head>
@@ -770,7 +821,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                     </div>
                 </div>
 
-                <!-- FILTER TABS -->
                 <div class="mo-tabs">
                     <a href="?filter=all" class="mo-tab <?= $filter === 'all' ? 'active' : '' ?>">
                         <i class="bi bi-grid-3x3-gap-fill"></i>
@@ -800,7 +850,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                 </div>
 
 
-                <!-- ORDERS LIST -->
                 <?php if (empty($orders)): ?>
 
                     <div class="mo-empty">
@@ -823,23 +872,23 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                     <div class="mo-list">
 
                         <?php foreach ($orders as $o):
-                            $status  = statusMeta($o['status'], $o['payment_status']);
-                            $pay     = paymentMeta($o['payment_status']);
-                            $items   = json_decode($o['products_json'] ?? '[]', true);
+                            $status = statusMeta($o['status'], $o['payment_status']);
+                            $pay    = paymentMeta($o['payment_status']);
+
+                            $items = json_decode($o['products_json'] ?? '[]', true);
                             if (!is_array($items)) $items = [];
 
-                            $mode    = strtolower($o['delivery_mode'] ?? 'delivery');
-                            $boyName = trim($o['delivery_boy_name'] ?? '');
-                            $boyCode = trim($o['delivery_boy_code'] ?? '');
+                            $mode        = strtolower($o['delivery_mode'] ?? 'delivery');
+                            $addressType = $o['address_type'] ?? 'apartment';
+                            $addr        = $o['_addr'] ?? [];
+                            $boyName     = trim($o['delivery_boy_name'] ?? '');
+                            $boyCode     = trim($o['delivery_boy_code'] ?? '');
                         ?>
                             <div class="mo-order">
 
-                                <!-- HEAD -->
                                 <div class="mo-order-head">
                                     <div class="mo-order-head-left">
-                                        <span class="mo-order-code">
-                                            #<?= htmlspecialchars($o['order_code']) ?>
-                                        </span>
+                                        <span class="mo-order-code">#<?= htmlspecialchars($o['order_code']) ?></span>
                                         <span class="mo-order-date">
                                             <i class="bi bi-clock"></i>
                                             <?= htmlspecialchars(formatOrderDate($o['created_at'])) ?>
@@ -858,7 +907,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                                     </div>
                                 </div>
 
-                                <!-- BODY: items -->
                                 <div class="mo-order-body">
                                     <div class="mo-items">
                                         <?php foreach (array_slice($items, 0, 3) as $it): ?>
@@ -895,7 +943,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                                     </div>
                                 </div>
 
-                                <!-- FOOTER -->
                                 <div class="mo-order-foot">
 
                                     <div class="mo-meta">
@@ -904,12 +951,21 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                                                 <i class="bi bi-shop"></i>
                                                 Pickup<?= !empty($o['pickup_branch_name']) ? ' · ' . htmlspecialchars($o['pickup_branch_name']) : '' ?>
                                             </span>
+                                        <?php elseif ($addressType === 'individual_house'): ?>
+                                            <span style="flex-wrap:wrap;">
+                                                <i class="bi bi-house-door"></i>
+                                                <?= htmlspecialchars($addr['full_address'] ?? '—') ?>
+                                            </span>
+                                            <span class="mo-ih-badge">
+                                                <i class="bi bi-house-door-fill"></i>
+                                                Individual House
+                                            </span>
                                         <?php else: ?>
                                             <span>
                                                 <i class="bi bi-geo-alt"></i>
-                                                <?= htmlspecialchars($o['apartment_name'] ?: '—') ?>
-                                                <?php if (!empty($o['division'])): ?>
-                                                    · Div <?= htmlspecialchars($o['division']) ?>
+                                                <?= htmlspecialchars($addr['apartment_name'] ?? '—') ?>
+                                                <?php if (!empty($addr['division_label'])): ?>
+                                                    · <?= htmlspecialchars($addr['division_label']) ?>
                                                 <?php endif; ?>
                                             </span>
                                         <?php endif; ?>
@@ -956,10 +1012,8 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
 
                     </div>
 
-                    <!-- PAGINATION -->
                     <?php if ($totalPages > 1): ?>
                         <div class="mo-pagination">
-
                             <a href="?filter=<?= $filter ?>&page=<?= max(1, $page - 1) ?>"
                                 class="mo-page-btn <?= $page <= 1 ? 'disabled' : '' ?>">
                                 <i class="bi bi-chevron-left"></i>
@@ -988,7 +1042,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                                 class="mo-page-btn <?= $page >= $totalPages ? 'disabled' : '' ?>">
                                 <i class="bi bi-chevron-right"></i>
                             </a>
-
                         </div>
                     <?php endif; ?>
 

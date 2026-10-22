@@ -2,7 +2,7 @@
 /* =========================================================
    MRS MILL@ — CUSTOMER LOGIN
    File: ./ajax/customer-login.php
-   Accepts: mobile_number, password (optional)
+   Source: `customers` only (per current mrs_millet schema).
    ========================================================= */
 
 require_once __DIR__ . '/../config/config.php';
@@ -22,8 +22,10 @@ if (!preg_match('/^[0-9]{10,15}$/', $mobile)) {
 }
 
 try {
+
     $stmt = $pdo->prepare(
-        "SELECT id, full_name, password_hash, profile_completed
+        "SELECT id, customer_id, full_name, password_hash,
+                profile_completed, address_type, address_json
          FROM customers
          WHERE mobile_number = ? AND status = 1
          LIMIT 1"
@@ -31,7 +33,6 @@ try {
     $stmt->execute([$mobile]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    /* New customer */
     if (!$row) {
         jsonResponse(true, 'New customer', [
             'exists' => false,
@@ -39,10 +40,8 @@ try {
         ]);
     }
 
-    /* Existing customer — needs password */
+    /* Needs a password? */
     if (!empty($row['password_hash'])) {
-
-        /* Password not provided yet — ask for it */
         if ($password === '') {
             jsonResponse(true, 'Password required', [
                 'exists'          => true,
@@ -51,29 +50,35 @@ try {
                 'name'            => $row['full_name']
             ]);
         }
-
-        /* Password provided — verify */
         if (!password_verify($password, $row['password_hash'])) {
             jsonResponse(false, 'Incorrect password.');
         }
     }
 
-    /* Success — set session */
+    /* Login success */
     $_SESSION['customer_id']     = (int)$row['id'];
+    $_SESSION['customer_code']   = $row['customer_id'];
     $_SESSION['customer_name']   = $row['full_name'];
     $_SESSION['customer_mobile'] = $mobile;
 
     $pdo->prepare("UPDATE customers SET last_login_at = NOW() WHERE id = ?")
         ->execute([$row['id']]);
 
+    /* Decode address for the front-end */
+    $addr = json_decode($row['address_json'] ?? '{}', true);
+    if (!is_array($addr)) $addr = [];
+
     jsonResponse(true, 'Welcome back, ' . $row['full_name'] . '!', [
         'exists'            => true,
         'id'                => (int)$row['id'],
+        'customer_id'       => $row['customer_id'],
         'name'              => $row['full_name'],
         'mobile'            => $mobile,
+        'address_type'      => $row['address_type'] ?: 'apartment',
+        'address'           => $addr,
         'profile_completed' => (int)$row['profile_completed'] === 1
     ]);
 
 } catch (PDOException $e) {
-    jsonResponse(false, 'Server error. Please try again.');
+    jsonResponse(false, 'Server error: ' . $e->getMessage());
 }

@@ -85,19 +85,48 @@ if ($isMenuActive) {
     $categories = getMenuCategories($pdo, 50);
 }
 
-/* Logged-in customer */
+/* =========================================================
+   LOGGED-IN CUSTOMER
+   $_SESSION['customer_id'] = customers.id (INTEGER)
+   $_SESSION['customer_code'] = customers.customer_id (MRSMCxxxxx)
+   ========================================================= */
 $customerLoggedIn = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0;
-$customerName     = $_SESSION['customer_name'] ?? '';
+$customerRowId    = $customerLoggedIn ? (int)$_SESSION['customer_id'] : 0;
+$customerCode     = $_SESSION['customer_code']   ?? '';
+$customerName     = $_SESSION['customer_name']   ?? '';
 $customerMobile   = $_SESSION['customer_mobile'] ?? '';
 
-/* Cart */
+/* =========================================================
+   CART COUNT + TOTAL
+   - Logged in → from DB (customer_cart.customer_id = customers.id)
+   - Guest     → from $_SESSION['cart']
+   ========================================================= */
 $cartCount = 0;
-$cartTotal = 0;
-if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
-    foreach ($_SESSION['cart'] as $c) {
-        $qty = (int)($c['qty'] ?? 0);
-        $cartCount += $qty;
-        $cartTotal += ((float)($c['price'] ?? 0)) * $qty;
+$cartTotal = 0.0;
+
+if ($customerRowId > 0) {
+    try {
+        $stmt = $pdo->prepare(
+            "SELECT COALESCE(SUM(qty),0) AS c,
+                    COALESCE(SUM(price * qty),0) AS t
+             FROM customer_cart
+             WHERE customer_id = ?"
+        );
+        $stmt->execute([$customerRowId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $cartCount = (int)($row['c'] ?? 0);
+        $cartTotal = (float)($row['t'] ?? 0);
+    } catch (PDOException $e) {
+        $cartCount = 0;
+        $cartTotal = 0.0;
+    }
+} else {
+    if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
+        foreach ($_SESSION['cart'] as $c) {
+            $q = (int)($c['qty'] ?? 0);
+            $cartCount += $q;
+            $cartTotal += ((float)($c['price'] ?? 0)) * $q;
+        }
     }
 }
 ?>
@@ -313,7 +342,7 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
 
 
     <div id="mmToast"></div>
-    <?php include_once './includes/footer.php'; ?> 
+    <?php include_once './includes/footer.php'; ?>
 
     <!-- ================= GLOBALS ================= -->
     <script>
@@ -321,6 +350,13 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
         window.ADMIN_URL = "<?= ADMIN_URL ?>";
         window.IS_LOGGED_IN = <?= $customerLoggedIn ? 'true' : 'false' ?>;
         window.CART_COUNT = <?= (int)$cartCount ?>;
+        window.CART_TOTAL = <?= (float)$cartTotal ?>;
+        window.CUSTOMER = {
+            id:     <?= (int)$customerRowId ?>,
+            code:   "<?= htmlspecialchars($customerCode,   ENT_QUOTES) ?>",
+            name:   "<?= htmlspecialchars($customerName,   ENT_QUOTES) ?>",
+            mobile: "<?= htmlspecialchars($customerMobile, ENT_QUOTES) ?>"
+        };
         window.DISCOUNT = <?= json_encode($currentDiscount, JSON_UNESCAPED_UNICODE) ?>;
     </script>
 

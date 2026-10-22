@@ -21,14 +21,16 @@ if (!$customerLoggedIn) {
 $customerId = (int)$_SESSION['customer_id'];
 
 /* =========================================================
-   LOAD CUSTOMER
+   LOAD CUSTOMER (current schema)
+   customers: id, customer_id, full_name, mobile_number,
+              address_type, address_json, wallet_balance,
+              profile_completed, status, created_at
    ========================================================= */
 $customer = null;
 try {
     $stmt = $pdo->prepare(
-        "SELECT id, full_name, mobile_number,
-                apartment_id, apartment_code, apartment_name,
-                division, division_charge,
+        "SELECT id, customer_id, full_name, mobile_number,
+                address_type, address_json,
                 COALESCE(wallet_balance, 0) AS wallet_balance,
                 status, created_at
          FROM customers
@@ -42,45 +44,61 @@ try {
 }
 
 if (!$customer) {
-    session_destroy();
     header('Location: ' . MAIN_URL . 'login.php');
     exit;
 }
 
-$customerName    = $customer['full_name'];
-$customerMobile  = $customer['mobile_number'];
-$customerWallet  = (float)$customer['wallet_balance'];
-$customerAptId   = (int)($customer['apartment_id'] ?? 0);
-$customerAptCode = $customer['apartment_code'] ?? '';
-$customerAptName = $customer['apartment_name'] ?? '';
-$customerDivision = $customer['division'] ?? '';
-$customerDivCharge = (float)($customer['division_charge'] ?? 0);
-$customerJoined  = $customer['created_at'];
+/* Decode address_json once */
+$custAddress     = [];
+if (!empty($customer['address_json'])) {
+    $decoded = json_decode($customer['address_json'], true);
+    if (is_array($decoded)) $custAddress = $decoded;
+}
+
+$customerCode     = $customer['customer_id']   ?? '';
+$customerName     = $customer['full_name']     ?? '';
+$customerMobile   = $customer['mobile_number'] ?? '';
+$customerWallet   = (float)$customer['wallet_balance'];
+$customerJoined   = $customer['created_at'];
+$customerAddressType = $customer['address_type'] ?: 'apartment';
+
+/* Address fields — apartment OR individual house */
+$customerAptId       = (int)($custAddress['apartment_id']    ?? 0);
+$customerAptCode     = $custAddress['apartment_code'] ?? '';
+$customerAptName     = $custAddress['apartment_name'] ?? '';
+$customerDivision    = $custAddress['division_label'] ?? '';
+$customerDivCharge   = (float)($custAddress['charge']         ?? 0);
+$customerFullAddress = $custAddress['full_address']  ?? '';
+$customerMapLink     = $custAddress['map_link']      ?? '';
+$customerHouseImage  = $custAddress['house_image']   ?? '';
 
 /* =========================================================
    KPI
    ========================================================= */
 $kpi = [
-    'orders'     => 0,
-    'spent'      => 0,
+    'orders'              => 0,
+    'spent'               => 0,
     'containers_held'     => 0,
     'containers_returned' => 0,
     'containers_total'    => 0,
 ];
 
+/* Orders — filter by orders.customer_id = MRSMCxxxxx (varchar) */
 try {
     $row = $pdo->prepare(
         "SELECT COUNT(*) AS cnt,
                 COALESCE(SUM(total_amount),0) AS spent
          FROM orders
-         WHERE customer_mobile = ? AND status <> 'cancelled'"
+         WHERE customer_id = ? AND status <> 'cancelled'"
     );
-    $row->execute([$customerMobile]);
+    $row->execute([$customerCode]);
     $r = $row->fetch(PDO::FETCH_ASSOC);
     $kpi['orders'] = (int)($r['cnt'] ?? 0);
     $kpi['spent']  = (float)($r['spent'] ?? 0);
-} catch (PDOException $e) {}
+} catch (PDOException $e) {
+}
 
+/* Containers — order_containers.customer_id is INT (customers.id) */
 try {
     $row = $pdo->prepare(
         "SELECT COALESCE(SUM(total_containers),0) AS total_c,
@@ -93,7 +111,8 @@ try {
     $kpi['containers_total']    = (int)($r['total_c'] ?? 0);
     $kpi['containers_returned'] = (int)($r['recv_c'] ?? 0);
     $kpi['containers_held']     = max(0, $kpi['containers_total'] - $kpi['containers_returned']);
-} catch (PDOException $e) {}
+} catch (PDOException $e) {
+}
 
 /* =========================================================
    PAGINATION
@@ -132,7 +151,8 @@ try {
     );
     $stmt->execute([$customerId]);
     $walletTxns = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {}
+} catch (PDOException $e) {
+}
 
 /* =========================================================
    CONTAINERS
@@ -162,10 +182,12 @@ try {
     );
     $stmt->execute([$customerId]);
     $containers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {}
+} catch (PDOException $e) {
+}
 
 /* =========================================================
-   RECENT ORDERS (with delivery boy)
+   RECENT ORDERS
+   Filter by orders.customer_id = MRSMCxxxxx
    ========================================================= */
 $recentOrders = [];
 try {
@@ -176,22 +198,25 @@ try {
                 o.payment_status,
                 o.delivery_status,
                 o.delivery_mode,
+                o.address_type,
+                o.address_json,
                 o.created_at,
                 o.delivery_boy_id,
                 b.full_name     AS delivery_boy_name,
                 b.delivery_code AS delivery_boy_code
          FROM orders o
          LEFT JOIN delivery_boys b ON b.id = o.delivery_boy_id
-         WHERE o.customer_mobile = ?
+         WHERE o.customer_id = ?
          ORDER BY o.id DESC
          LIMIT 10"
     );
-    $stmt->execute([$customerMobile]);
+    $stmt->execute([$customerCode]);
     $recentOrders = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {}
+} catch (PDOException $e) {
+}
 
 /* =========================================================
-   APARTMENTS
+   APARTMENTS (for profile form)
    ========================================================= */
 $apartments = [];
 try {
@@ -200,28 +225,33 @@ try {
          FROM apartments WHERE status = 1
          ORDER BY apartment_name ASC"
     )->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {}
+} catch (PDOException $e) {
+}
 
 /* =========================================================
    HELPERS
    ========================================================= */
-function rupees($n) {
+function rupees($n)
+{
     return '₹' . number_format((int)round($n));
 }
 
-function shortDate($ts) {
+function shortDate($ts)
+{
     $t = strtotime($ts);
     if ($t === false) return '';
     return date('d M Y', $t);
 }
 
-function shortTime($ts) {
+function shortTime($ts)
+{
     $t = strtotime($ts);
     if ($t === false) return '';
     return date('g:i A', $t);
 }
 
-function initials($name) {
+function initials($name)
+{
     $name = trim((string)$name);
     if ($name === '') return '?';
     $parts = preg_split('/\s+/', $name);
@@ -231,7 +261,8 @@ function initials($name) {
     return strtoupper(substr($name, 0, 2));
 }
 
-function renderPager($baseUrl, $pageParam, $current, $totalPages) {
+function renderPager($baseUrl, $pageParam, $current, $totalPages)
+{
     if ($totalPages <= 1) return '';
 
     $sep = (strpos($baseUrl, '?') === false) ? '?' : '&';
@@ -269,15 +300,20 @@ function renderPager($baseUrl, $pageParam, $current, $totalPages) {
 
 $initials = initials($customerName);
 
-/* Cart */
+/* Cart (from customer_cart) */
 $cartCount = 0;
 $cartTotal = 0;
-if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
-    foreach ($_SESSION['cart'] as $c) {
-        $qty = (int)($c['qty'] ?? 0);
-        $cartCount += $qty;
-        $cartTotal += ((float)($c['price'] ?? 0)) * $qty;
-    }
+try {
+    $cc = $pdo->prepare(
+        "SELECT COALESCE(SUM(qty),0) AS c,
+                COALESCE(SUM(price * qty),0) AS t
+         FROM customer_cart WHERE customer_id = ?"
+    );
+    $cc->execute([$customerId]);
+    $r = $cc->fetch(PDO::FETCH_ASSOC);
+    $cartCount = (int)($r['c'] ?? 0);
+    $cartTotal = (float)($r['t'] ?? 0);
+} catch (PDOException $e) {
 }
 ?>
 <!DOCTYPE html>
@@ -287,9 +323,10 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
     <?php include_once './includes/head_links.php'; ?>
 
     <style>
-        .pf-page { padding: 26px 0 80px; }
+        .pf-page {
+            padding: 26px 0 80px;
+        }
 
-        /* ---------- HEADER CARD ---------- */
         .pf-header {
             position: relative;
             background: linear-gradient(135deg, #b51f2c 0%, #8e1722 100%);
@@ -301,25 +338,26 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             box-shadow: 0 18px 40px rgba(181, 31, 44, .22);
         }
 
-        .pf-header::before {
+        .pf-header::before,
+        .pf-header::after {
             content: "";
             position: absolute;
-            right: -60px;
-            top: -60px;
-            width: 260px;
-            height: 260px;
             border-radius: 50%;
             background: rgba(255, 255, 255, .07);
         }
 
+        .pf-header::before {
+            right: -60px;
+            top: -60px;
+            width: 260px;
+            height: 260px;
+        }
+
         .pf-header::after {
-            content: "";
-            position: absolute;
             right: 40px;
             bottom: -80px;
             width: 180px;
             height: 180px;
-            border-radius: 50%;
             background: rgba(255, 255, 255, .05);
         }
 
@@ -348,7 +386,10 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             flex-shrink: 0;
         }
 
-        .pf-header-info { flex: 1; min-width: 200px; }
+        .pf-header-info {
+            flex: 1;
+            min-width: 200px;
+        }
 
         .pf-header-info h1 {
             font-family: "Playfair Display", serif;
@@ -383,7 +424,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             backdrop-filter: blur(4px);
         }
 
-        /* ---------- KPI STRIP ---------- */
         .pf-kpis {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -391,8 +431,17 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             margin-bottom: 22px;
         }
 
-        @media (max-width: 900px) { .pf-kpis { grid-template-columns: repeat(2, 1fr); } }
-        @media (max-width: 480px) { .pf-kpis { grid-template-columns: 1fr; } }
+        @media (max-width: 900px) {
+            .pf-kpis {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 480px) {
+            .pf-kpis {
+                grid-template-columns: 1fr;
+            }
+        }
 
         .pf-kpi {
             background: #fff;
@@ -415,10 +464,25 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             flex-shrink: 0;
         }
 
-        .pf-kpi-icon.green  { background: #e8f6ea; color: #1b5e20; }
-        .pf-kpi-icon.gold   { background: #fdf1e2; color: #b8893c; }
-        .pf-kpi-icon.red    { background: #fdeaea; color: #b51f2c; }
-        .pf-kpi-icon.blue   { background: #e5eefb; color: #1565c0; }
+        .pf-kpi-icon.green {
+            background: #e8f6ea;
+            color: #1b5e20;
+        }
+
+        .pf-kpi-icon.gold {
+            background: #fdf1e2;
+            color: #b8893c;
+        }
+
+        .pf-kpi-icon.red {
+            background: #fdeaea;
+            color: #b51f2c;
+        }
+
+        .pf-kpi-icon.blue {
+            background: #e5eefb;
+            color: #1565c0;
+        }
 
         .pf-kpi-label {
             font-size: 10.5px;
@@ -437,11 +501,18 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             line-height: 1.1;
         }
 
-        .pf-kpi-value.green { color: #1b5e20; }
-        .pf-kpi-value.gold  { color: #b8893c; }
-        .pf-kpi-value.red   { color: #b51f2c; }
+        .pf-kpi-value.green {
+            color: #1b5e20;
+        }
 
-        /* ---------- TABS ---------- */
+        .pf-kpi-value.gold {
+            color: #b8893c;
+        }
+
+        .pf-kpi-value.red {
+            color: #b51f2c;
+        }
+
         .pf-tabs {
             display: flex;
             flex-wrap: wrap;
@@ -471,7 +542,10 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             outline: none;
         }
 
-        .pf-tab:hover { color: #b51f2c; background: #fff; }
+        .pf-tab:hover {
+            color: #b51f2c;
+            background: #fff;
+        }
 
         .pf-tab.active {
             background: #fff;
@@ -480,13 +554,20 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
         }
 
         @media (max-width: 640px) {
-            .pf-tab { padding: 9px 12px; font-size: 11.5px; }
+            .pf-tab {
+                padding: 9px 12px;
+                font-size: 11.5px;
+            }
         }
 
-        .pf-panel { display: none; }
-        .pf-panel.active { display: block; }
+        .pf-panel {
+            display: none;
+        }
 
-        /* ---------- CARD ---------- */
+        .pf-panel.active {
+            display: block;
+        }
+
         .pf-card {
             background: #fff;
             border: 1.5px solid #ece5da;
@@ -518,8 +599,9 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             font-size: 14px;
         }
 
-        /* ---------- FORM ---------- */
-        .pf-field { margin-bottom: 16px; }
+        .pf-field {
+            margin-bottom: 16px;
+        }
 
         .pf-field label {
             display: block;
@@ -557,10 +639,13 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             cursor: not-allowed;
         }
 
-        /* ---------- PASSWORD EYE ---------- */
-        .pf-pass-wrap { position: relative; }
+        .pf-pass-wrap {
+            position: relative;
+        }
 
-        .pf-pass-wrap .pf-input { padding-right: 48px; }
+        .pf-pass-wrap .pf-input {
+            padding-right: 48px;
+        }
 
         .pf-eye-btn {
             position: absolute;
@@ -586,7 +671,9 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             background: #fbe8e9;
         }
 
-        .pf-eye-btn.active { color: #b51f2c; }
+        .pf-eye-btn.active {
+            color: #b51f2c;
+        }
 
         .pf-btn {
             display: inline-flex;
@@ -610,7 +697,9 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             box-shadow: 0 10px 24px rgba(181, 31, 44, .22);
         }
 
-        .pf-btn-primary:hover { transform: translateY(-1px); }
+        .pf-btn-primary:hover {
+            transform: translateY(-1px);
+        }
 
         .pf-btn-ghost {
             background: #fff;
@@ -618,7 +707,10 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             color: #6f675f;
         }
 
-        .pf-btn-ghost:hover { background: #faf7f0; color: #302923; }
+        .pf-btn-ghost:hover {
+            background: #faf7f0;
+            color: #302923;
+        }
 
         .pf-grid-2 {
             display: grid;
@@ -626,9 +718,12 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             gap: 16px;
         }
 
-        @media (max-width: 640px) { .pf-grid-2 { grid-template-columns: 1fr; } }
+        @media (max-width: 640px) {
+            .pf-grid-2 {
+                grid-template-columns: 1fr;
+            }
+        }
 
-        /* ---------- TABLE ---------- */
         .pf-table-wrap {
             overflow-x: auto;
             border: 1px solid #f0ebe4;
@@ -663,8 +758,13 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             vertical-align: middle;
         }
 
-        .pf-table tbody tr:last-child td { border-bottom: 0; }
-        .pf-table tbody tr:hover { background: #fdfaf4; }
+        .pf-table tbody tr:last-child td {
+            border-bottom: 0;
+        }
+
+        .pf-table tbody tr:hover {
+            background: #fdfaf4;
+        }
 
         .pf-badge {
             display: inline-flex;
@@ -678,15 +778,55 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             text-transform: uppercase;
         }
 
-        .pf-badge.credit  { background: #e8f6ea; color: #1b5e20; }
-        .pf-badge.debit   { background: #fdecec; color: #b51f2c; }
-        .pf-badge.pending { background: #fff7e7; color: #8a6a1e; }
-        .pf-badge.confirmed { background: #eef4fd; color: #1565c0; }
-        .pf-badge.delivered { background: #e8f6ea; color: #1b5e20; }
-        .pf-badge.cancelled { background: #fdecec; color: #b51f2c; }
-        .pf-badge.partial { background: #fff7e7; color: #8a6a1e; }
-        .pf-badge.received { background: #e8f6ea; color: #1b5e20; }
-        .pf-badge.not_received { background: #fdecec; color: #b51f2c; }
+        .pf-badge.credit {
+            background: #e8f6ea;
+            color: #1b5e20;
+        }
+
+        .pf-badge.debit {
+            background: #fdecec;
+            color: #b51f2c;
+        }
+
+        .pf-badge.pending {
+            background: #fff7e7;
+            color: #8a6a1e;
+        }
+
+        .pf-badge.confirmed {
+            background: #eef4fd;
+            color: #1565c0;
+        }
+
+        .pf-badge.delivered {
+            background: #e8f6ea;
+            color: #1b5e20;
+        }
+
+        .pf-badge.cancelled {
+            background: #fdecec;
+            color: #b51f2c;
+        }
+
+        .pf-badge.partial {
+            background: #fff7e7;
+            color: #8a6a1e;
+        }
+
+        .pf-badge.received {
+            background: #e8f6ea;
+            color: #1b5e20;
+        }
+
+        .pf-badge.not_received {
+            background: #fdecec;
+            color: #b51f2c;
+        }
+
+        .pf-badge.individual {
+            background: #eef7f0;
+            color: #2e7d32;
+        }
 
         .pf-txn-code {
             font-family: "DM Sans", monospace;
@@ -704,8 +844,13 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             font-variant-numeric: tabular-nums;
         }
 
-        .pf-amount.credit { color: #1b5e20; }
-        .pf-amount.debit  { color: #b51f2c; }
+        .pf-amount.credit {
+            color: #1b5e20;
+        }
+
+        .pf-amount.debit {
+            color: #b51f2c;
+        }
 
         .pf-note {
             font-size: 11px;
@@ -719,7 +864,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             vertical-align: middle;
         }
 
-        /* ---------- DELIVERY BOY CELL ---------- */
         .pf-dboy {
             display: flex;
             align-items: center;
@@ -741,7 +885,9 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             flex-shrink: 0;
         }
 
-        .pf-dboy-info { min-width: 0; }
+        .pf-dboy-info {
+            min-width: 0;
+        }
 
         .pf-dboy-name {
             font-size: 12px;
@@ -770,9 +916,10 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             gap: 5px;
         }
 
-        .pf-dboy-pickup { color: #a35a0e; }
+        .pf-dboy-pickup {
+            color: #a35a0e;
+        }
 
-        /* ---------- EMPTY ---------- */
         .pf-empty {
             padding: 40px 20px;
             text-align: center;
@@ -787,7 +934,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             margin-bottom: 10px;
         }
 
-        /* ---------- WALLET SUMMARY ---------- */
         .pf-wallet-summary {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -795,7 +941,11 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             margin-bottom: 20px;
         }
 
-        @media (max-width: 560px) { .pf-wallet-summary { grid-template-columns: 1fr; } }
+        @media (max-width: 560px) {
+            .pf-wallet-summary {
+                grid-template-columns: 1fr;
+            }
+        }
 
         .pf-wallet-tile {
             padding: 16px 18px;
@@ -826,9 +976,10 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             line-height: 1.1;
         }
 
-        .pf-wallet-tile.gold .pf-wallet-tile-value { color: #b8893c; }
+        .pf-wallet-tile.gold .pf-wallet-tile-value {
+            color: #b8893c;
+        }
 
-        /* ---------- PAGER ---------- */
         .pf-pager {
             display: flex;
             justify-content: center;
@@ -884,9 +1035,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
             letter-spacing: .03em;
         }
 
-        /* =====================================================
-           TOAST — top-right, slides in from right
-           ===================================================== */
         #mmToast {
             position: fixed;
             top: 24px;
@@ -971,7 +1119,13 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                             <h1><?= htmlspecialchars($customerName) ?></h1>
                             <p><?= htmlspecialchars($customerMobile) ?></p>
                             <div class="pf-header-meta">
-                                <?php if ($customerAptName): ?>
+
+                                <?php if ($customerAddressType === 'individual_house' && $customerFullAddress !== ''): ?>
+                                    <span class="pf-chip" style="background:rgba(255,255,255,.22);">
+                                        <i class="bi bi-house-door"></i>
+                                        <?= htmlspecialchars($customerFullAddress) ?>
+                                    </span>
+                                <?php elseif ($customerAptName !== ''): ?>
                                     <span class="pf-chip">
                                         <i class="bi bi-building"></i>
                                         <?= htmlspecialchars($customerAptName) ?>
@@ -980,6 +1134,7 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                                         <?php endif; ?>
                                     </span>
                                 <?php endif; ?>
+
                                 <span class="pf-chip">
                                     <i class="bi bi-calendar3"></i>
                                     Joined <?= htmlspecialchars(shortDate($customerJoined)) ?>
@@ -999,7 +1154,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                             <div class="pf-kpi-value"><?= (int)$kpi['orders'] ?></div>
                         </div>
                     </div>
-
                     <div class="pf-kpi">
                         <div class="pf-kpi-icon green"><i class="bi bi-wallet2"></i></div>
                         <div>
@@ -1007,7 +1161,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                             <div class="pf-kpi-value green"><?= rupees($customerWallet) ?></div>
                         </div>
                     </div>
-
                     <div class="pf-kpi">
                         <div class="pf-kpi-icon red"><i class="bi bi-cash-coin"></i></div>
                         <div>
@@ -1015,7 +1168,6 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                             <div class="pf-kpi-value red"><?= rupees($kpi['spent']) ?></div>
                         </div>
                     </div>
-
                     <div class="pf-kpi">
                         <div class="pf-kpi-icon gold"><i class="bi bi-box2-heart"></i></div>
                         <div>
@@ -1046,9 +1198,7 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                 </div>
 
 
-                <!-- ===================================================== -->
-                <!-- OVERVIEW                                              -->
-                <!-- ===================================================== -->
+                <!-- ============== OVERVIEW ============== -->
                 <div class="pf-panel active" id="panel-overview">
 
                     <div class="pf-card">
@@ -1074,56 +1224,79 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                                 </div>
                             </div>
 
-                            <div class="pf-grid-2">
-                                <div class="pf-field" style="position:relative;">
-                                    <label>Apartment</label>
+                            <?php if ($customerAddressType === 'individual_house'): ?>
 
-                                    <div style="position:relative;">
-                                        <i class="bi bi-search" style="position:absolute;left:14px;top:50%;transform:translateY(-50%);color:#b0a79c;font-size:15px;pointer-events:none;"></i>
-                                        <input type="text" id="pfAptSearch" class="pf-input"
-                                            style="padding-left:40px;padding-right:40px;"
-                                            placeholder="Search apartment by name or code..."
-                                            value="<?= htmlspecialchars($customerAptName) ?>"
-                                            autocomplete="off">
-                                        <i class="bi bi-chevron-down" style="position:absolute;right:14px;top:50%;transform:translateY(-50%);color:#b0a79c;font-size:12px;pointer-events:none;"></i>
-                                    </div>
-
-                                    <input type="hidden" id="pfAptId" value="<?= (int)$customerAptId ?>">
-                                    <input type="hidden" id="pfAptCode" value="<?= htmlspecialchars($customerAptCode) ?>">
-
-                                    <div id="pfAptResults"
-                                        style="position:absolute;top:calc(100% + 6px);left:0;right:0;background:#fff;border:1.5px solid #ece5da;border-radius:14px;box-shadow:0 20px 40px rgba(48,41,35,.14);z-index:30;max-height:280px;overflow-y:auto;display:none;">
-                                    </div>
+                                <div class="pf-field">
+                                    <label>Full Address</label>
+                                    <input type="text" class="pf-input"
+                                        value="<?= htmlspecialchars($customerFullAddress) ?>"
+                                        disabled>
                                 </div>
 
-                                <div class="pf-field" id="pfDivField" style="<?= $customerAptId > 0 ? '' : 'display:none;' ?>">
-                                    <label>Division</label>
-                                    <select id="pfDivision" class="pf-input">
-                                        <option value="">— Select division —</option>
-                                        <?php
-                                        if ($customerAptId > 0) {
-                                            foreach ($apartments as $a) {
-                                                if ((int)$a['id'] === (int)$customerAptId) {
-                                                    $divs = json_decode($a['divisions'] ?? '[]', true);
-                                                    if (is_array($divs)) {
-                                                        foreach ($divs as $d) {
-                                                            $dv = (string)($d['division'] ?? '');
-                                                            $dc = (float)($d['charge'] ?? 0);
-                                                            $sel = ($dv === (string)$customerDivision) ? 'selected' : '';
-                                                            echo '<option value="' . htmlspecialchars($dv) . '" data-charge="' . $dc . '" ' . $sel . '>'
-                                                                 . 'Division ' . htmlspecialchars($dv) . ' · ₹' . (int)round($dc)
-                                                                 . '</option>';
+                                <?php if ($customerMapLink !== ''): ?>
+                                    <div class="pf-field">
+                                        <label>Google Maps Link</label>
+                                        <input type="text" class="pf-input"
+                                            value="<?= htmlspecialchars($customerMapLink) ?>"
+                                            disabled>
+                                    </div>
+                                <?php endif; ?>
+
+                                <div style="padding:12px 14px;border-radius:11px;background:#eef7f0;border:1px dashed #c9e3ce;font-size:12px;color:#2e7d32;font-weight:700;line-height:1.6;">
+                                    <i class="bi bi-house-door"></i>
+                                    Your individual house address is locked. Contact support to update it.
+                                </div>
+
+                            <?php else: ?>
+
+                                <div class="pf-grid-2">
+                                    <div class="pf-field" style="position:relative;">
+                                        <label>Apartment</label>
+                                        <div style="position:relative;">
+                                            <i class="bi bi-search" style="position:absolute;left:14px;top:50%;transform:translateY(-50%);color:#b0a79c;font-size:15px;pointer-events:none;"></i>
+                                            <input type="text" id="pfAptSearch" class="pf-input"
+                                                style="padding-left:40px;padding-right:40px;"
+                                                placeholder="Search apartment by name or code..."
+                                                value="<?= htmlspecialchars($customerAptName) ?>"
+                                                autocomplete="off">
+                                            <i class="bi bi-chevron-down" style="position:absolute;right:14px;top:50%;transform:translateY(-50%);color:#b0a79c;font-size:12px;pointer-events:none;"></i>
+                                        </div>
+                                        <input type="hidden" id="pfAptId" value="<?= (int)$customerAptId ?>">
+                                        <input type="hidden" id="pfAptCode" value="<?= htmlspecialchars($customerAptCode) ?>">
+                                        <div id="pfAptResults"
+                                            style="position:absolute;top:calc(100% + 6px);left:0;right:0;background:#fff;border:1.5px solid #ece5da;border-radius:14px;box-shadow:0 20px 40px rgba(48,41,35,.14);z-index:30;max-height:280px;overflow-y:auto;display:none;">
+                                        </div>
+                                    </div>
+
+                                    <div class="pf-field" id="pfDivField" style="<?= $customerAptId > 0 ? '' : 'display:none;' ?>">
+                                        <label>Division</label>
+                                        <select id="pfDivision" class="pf-input">
+                                            <option value="">— Select division —</option>
+                                            <?php
+                                            if ($customerAptId > 0) {
+                                                foreach ($apartments as $a) {
+                                                    if ((int)$a['id'] === (int)$customerAptId) {
+                                                        $divs = json_decode($a['divisions'] ?? '[]', true);
+                                                        if (is_array($divs)) {
+                                                            foreach ($divs as $d) {
+                                                                $dv = (string)($d['division'] ?? '');
+                                                                $dc = (float)($d['charge'] ?? 0);
+                                                                $sel = ($dv === (string)$customerDivision) ? 'selected' : '';
+                                                                echo '<option value="' . htmlspecialchars($dv) . '" data-charge="' . $dc . '" ' . $sel . '>'
+                                                                    . 'Division ' . htmlspecialchars($dv) . ' · ₹' . (int)round($dc)
+                                                                    . '</option>';
+                                                            }
                                                         }
+                                                        break;
                                                     }
-                                                    break;
                                                 }
                                             }
-                                        }
-                                        ?>
-                                    </select>
-                                    <input type="hidden" id="pfDivisionCharge" value="<?= (float)$customerDivCharge ?>">
+                                            ?>
+                                        </select>
+                                        <input type="hidden" id="pfDivisionCharge" value="<?= (float)$customerDivCharge ?>">
+                                    </div>
                                 </div>
-                            </div>
+                            <?php endif; ?>
 
                             <div style="display:flex;gap:10px;margin-top:6px;flex-wrap:wrap;">
                                 <button type="submit" class="pf-btn pf-btn-primary">
@@ -1135,15 +1308,11 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                             </div>
                         </form>
                     </div>
-
                 </div>
 
 
-                <!-- ===================================================== -->
-                <!-- ORDERS                                                -->
-                <!-- ===================================================== -->
+                <!-- ============== ORDERS ============== -->
                 <div class="pf-panel" id="panel-orders">
-
                     <div class="pf-card">
                         <h2 class="pf-card-title">
                             <i class="bi bi-bag-check"></i>
@@ -1173,11 +1342,23 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                                             $s       = strtolower($o['status']);
                                             $p       = strtolower($o['payment_status']);
                                             $mode    = strtolower($o['delivery_mode'] ?? 'delivery');
+                                            $atype   = $o['address_type'] ?? 'apartment';
                                             $boyName = trim($o['delivery_boy_name'] ?? '');
                                             $boyCode = trim($o['delivery_boy_code'] ?? '');
+                                            $oa      = json_decode($o['address_json'] ?? '[]', true);
+                                            if (!is_array($oa)) $oa = [];
                                         ?>
                                             <tr>
-                                                <td><strong>#<?= htmlspecialchars($o['order_code']) ?></strong></td>
+                                                <td>
+                                                    <strong>#<?= htmlspecialchars($o['order_code']) ?></strong>
+                                                    <?php if ($atype === 'individual_house'): ?>
+                                                        <div style="margin-top:4px;">
+                                                            <span class="pf-badge individual">
+                                                                <i class="bi bi-house-door"></i> Individual House
+                                                            </span>
+                                                        </div>
+                                                    <?php endif; ?>
+                                                </td>
                                                 <td><?= htmlspecialchars(shortDate($o['created_at'])) ?></td>
                                                 <td class="pf-amount"><?= rupees($o['total_amount']) ?></td>
                                                 <td>
@@ -1226,21 +1407,16 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                             </div>
                         <?php endif; ?>
                     </div>
-
                 </div>
 
 
-                <!-- ===================================================== -->
-                <!-- WALLET HISTORY                                        -->
-                <!-- ===================================================== -->
+                <!-- ============== WALLET ============== -->
                 <div class="pf-panel" id="panel-wallet">
-
                     <div class="pf-wallet-summary">
                         <div class="pf-wallet-tile">
                             <div class="pf-wallet-tile-label">Current Balance</div>
                             <div class="pf-wallet-tile-value"><?= rupees($customerWallet) ?></div>
                         </div>
-
                         <div class="pf-wallet-tile gold">
                             <div class="pf-wallet-tile-label">Total Transactions</div>
                             <div class="pf-wallet-tile-value"><?= (int)$walletTotal ?></div>
@@ -1325,21 +1501,16 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                             <?php endif; ?>
                         <?php endif; ?>
                     </div>
-
                 </div>
 
 
-                <!-- ===================================================== -->
-                <!-- CONTAINERS                                            -->
-                <!-- ===================================================== -->
+                <!-- ============== CONTAINERS ============== -->
                 <div class="pf-panel" id="panel-containers">
-
                     <div class="pf-wallet-summary">
                         <div class="pf-wallet-tile gold">
                             <div class="pf-wallet-tile-label">Total Containers</div>
                             <div class="pf-wallet-tile-value"><?= (int)$kpi['containers_total'] ?></div>
                         </div>
-
                         <div class="pf-wallet-tile">
                             <div class="pf-wallet-tile-label">Currently Held</div>
                             <div class="pf-wallet-tile-value"><?= (int)$kpi['containers_held'] ?></div>
@@ -1422,15 +1593,11 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                             </div>
                         <?php endif; ?>
                     </div>
-
                 </div>
 
 
-                <!-- ===================================================== -->
-                <!-- SECURITY                                              -->
-                <!-- ===================================================== -->
+                <!-- ============== SECURITY ============== -->
                 <div class="pf-panel" id="panel-security">
-
                     <div class="pf-card">
                         <h2 class="pf-card-title">
                             <i class="bi bi-shield-lock"></i>
@@ -1467,14 +1634,11 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
                             </button>
                         </form>
                     </div>
-
                 </div>
 
             </div>
-
         </div>
     </main>
-
 
 
     <?php include_once './includes/mobile-nav-bar.php'; ?>
@@ -1484,10 +1648,13 @@ if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
     <div id="mmToast"></div>
 
     <?php include_once './includes/footer.php'; ?>
+
     <script>
         window.MAIN_URL = "<?= MAIN_URL ?>";
         window.ADMIN_URL = "<?= ADMIN_URL ?>";
         window.CUSTOMER_ID = <?= (int)$customerId ?>;
+        window.CUSTOMER_CODE = "<?= htmlspecialchars($customerCode, ENT_QUOTES) ?>";
+        window.CUSTOMER_ADDRESS_TYPE = "<?= htmlspecialchars($customerAddressType, ENT_QUOTES) ?>";
         window.CUSTOMER_DIVISION = "<?= htmlspecialchars($customerDivision, ENT_QUOTES) ?>";
         window.APARTMENTS = <?= json_encode($apartments, JSON_UNESCAPED_UNICODE | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
         window.CURRENT_APARTMENT_ID = <?= (int)$customerAptId ?>;

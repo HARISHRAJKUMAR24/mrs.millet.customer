@@ -7,6 +7,7 @@
     "use strict";
 
     var MAIN_URL = window.MAIN_URL || "./";
+    var ADDRESS_TYPE = String(window.CUSTOMER_ADDRESS_TYPE || "apartment");
 
     /* ---------------- Toast ---------------- */
     function showToast(msg, isErr) {
@@ -54,7 +55,7 @@
 
 
     /* =========================================================
-       APARTMENT DROPDOWN
+       APARTMENT DROPDOWN — only relevant for apartment customers
        ========================================================= */
     var aptSearch    = document.getElementById("pfAptSearch");
     var aptResults   = document.getElementById("pfAptResults");
@@ -215,7 +216,7 @@
 
 
     /* =========================================================
-       PASSWORD SHOW / HIDE (eye icon)
+       PASSWORD SHOW / HIDE
        ========================================================= */
     document.querySelectorAll(".pf-eye-btn").forEach(function (btn) {
         btn.addEventListener("click", function () {
@@ -248,25 +249,34 @@
 
     /* =========================================================
        SAVE PROFILE
+       - Individual House customer → only full_name is editable,
+         backend ignores apartment/division
+       - Apartment customer → full_name + apartment + division
        ========================================================= */
     var profileForm = document.getElementById("profileForm");
     profileForm && profileForm.addEventListener("submit", function (e) {
         e.preventDefault();
 
-        var name  = document.getElementById("pfName").value.trim();
-        var aptId = aptIdInput.value;
-        var div   = divSelect.value;
-
+        var name = document.getElementById("pfName").value.trim();
         if (name.length < 3) { showToast("Please enter a valid name.", true); return; }
-        if (!aptId)          { showToast("Please choose an apartment.", true); return; }
-        if (!div)            { showToast("Please choose a division.", true); return; }
 
         var fd = new FormData();
         fd.append("full_name", name);
-        fd.append("apartment_id", aptId);
-        fd.append("apartment_code", aptCodeInput.value);
-        fd.append("division", div);
-        fd.append("division_charge", divCharge.value);
+
+        /* Only send apartment/division if this is an apartment customer
+           AND the fields actually exist in the DOM */
+        if (ADDRESS_TYPE === "apartment" && aptIdInput && divSelect) {
+            var aptId = aptIdInput.value;
+            var div   = divSelect.value;
+
+            if (!aptId) { showToast("Please choose an apartment.", true); return; }
+            if (!div)   { showToast("Please choose a division.", true); return; }
+
+            fd.append("apartment_id", aptId);
+            fd.append("apartment_code", aptCodeInput.value);
+            fd.append("division", div);
+            fd.append("division_charge", divCharge.value);
+        }
 
         var btn = this.querySelector("button[type=submit]");
         btn.disabled = true;
@@ -298,7 +308,7 @@
 
 
     /* =========================================================
-       SET NEW PASSWORD (no old password required)
+       SET NEW PASSWORD
        ========================================================= */
     var passwordForm = document.getElementById("passwordForm");
     passwordForm && passwordForm.addEventListener("submit", function (e) {

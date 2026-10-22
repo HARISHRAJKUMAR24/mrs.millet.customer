@@ -85,19 +85,48 @@ if ($category) {
     }
 }
 
-/* Logged-in customer */
+/* =========================================================
+   LOGGED-IN CUSTOMER
+   $_SESSION['customer_id']   = customers.id (INTEGER)
+   $_SESSION['customer_code'] = customers.customer_id (MRSMCxxxxx)
+   ========================================================= */
 $customerLoggedIn = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0;
-$customerName     = $_SESSION['customer_name'] ?? '';
+$customerRowId    = $customerLoggedIn ? (int)$_SESSION['customer_id'] : 0;
+$customerCode     = $_SESSION['customer_code']   ?? '';
+$customerName     = $_SESSION['customer_name']   ?? '';
 $customerMobile   = $_SESSION['customer_mobile'] ?? '';
 
-/* Cart count + total */
+/* =========================================================
+   CART COUNT + TOTAL
+   - Logged in → DB (customer_cart.customer_id = customers.id)
+   - Guest     → $_SESSION['cart']
+   ========================================================= */
 $cartCount = 0;
-$cartTotal = 0;
-if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
-    foreach ($_SESSION['cart'] as $c) {
-        $qty = (int)($c['qty'] ?? 0);
-        $cartCount += $qty;
-        $cartTotal += ((float)($c['price'] ?? 0)) * $qty;
+$cartTotal = 0.0;
+
+if ($customerRowId > 0) {
+    try {
+        $stmt = $pdo->prepare(
+            "SELECT COALESCE(SUM(qty),0) AS c,
+                    COALESCE(SUM(price * qty),0) AS t
+             FROM customer_cart
+             WHERE customer_id = ?"
+        );
+        $stmt->execute([$customerRowId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $cartCount = (int)($row['c'] ?? 0);
+        $cartTotal = (float)($row['t'] ?? 0);
+    } catch (PDOException $e) {
+        $cartCount = 0;
+        $cartTotal = 0.0;
+    }
+} else {
+    if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
+        foreach ($_SESSION['cart'] as $c) {
+            $q = (int)($c['qty'] ?? 0);
+            $cartCount += $q;
+            $cartTotal += ((float)($c['price'] ?? 0)) * $q;
+        }
     }
 }
 
@@ -110,74 +139,74 @@ $categoryImage = $category ? categoryImageUrl($category['category_image'] ?? '')
     <?php include_once './includes/head_links.php'; ?>
     <style>
         /* ===== BREADCRUMB ===== */
-.mm-crumb {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    color: #948c82;
-    margin: 22px 0 10px;
-}
-.mm-crumb a {
-    color: #b51f2c;
-    text-decoration: none;
-    font-weight: 600;
-}
-.mm-crumb a:hover { text-decoration: underline; }
-.mm-crumb span.sep { color: #c9c2b8; }
+        .mm-crumb {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: #948c82;
+            margin: 22px 0 10px;
+        }
+        .mm-crumb a {
+            color: #b51f2c;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .mm-crumb a:hover { text-decoration: underline; }
+        .mm-crumb span.sep { color: #c9c2b8; }
 
-/* ===== CATEGORY HEADER ===== */
-.mm-cat-head {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 12px 0 2px;
-}
-.mm-cat-head-img {
-    width: 72px;
-    height: 72px;
-    border-radius: 18px;
-    overflow: hidden;
-    background: #fff;
-    border: 1px solid #fbeaea;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-}
-.mm-cat-head-img img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-.mm-cat-head-img svg {
-    width: 30px;
-    height: 30px;
-    color: #b51f2c;
-}
-.mm-cat-head-info { min-width: 0; }
-.mm-cat-head-title {
-    font-family: "Playfair Display", serif;
-    font-size: 22px;
-    font-weight: 700;
-    color: #302923;
-    margin: 0;
-    line-height: 1.25;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.mm-cat-head-sub {
-    font-size: 13px;
-    color: #a19a90;
-    margin: 4px 0 0;
-}
+        /* ===== CATEGORY HEADER ===== */
+        .mm-cat-head {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 12px 0 2px;
+        }
+        .mm-cat-head-img {
+            width: 72px;
+            height: 72px;
+            border-radius: 18px;
+            overflow: hidden;
+            background: #fff;
+            border: 1px solid #fbeaea;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .mm-cat-head-img img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .mm-cat-head-img svg {
+            width: 30px;
+            height: 30px;
+            color: #b51f2c;
+        }
+        .mm-cat-head-info { min-width: 0; }
+        .mm-cat-head-title {
+            font-family: "Playfair Display", serif;
+            font-size: 22px;
+            font-weight: 700;
+            color: #302923;
+            margin: 0;
+            line-height: 1.25;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .mm-cat-head-sub {
+            font-size: 13px;
+            color: #a19a90;
+            margin: 4px 0 0;
+        }
 
-@media (min-width: 640px) {
-    .mm-cat-head-img { width: 84px; height: 84px; border-radius: 20px; }
-    .mm-cat-head-title { font-size: 26px; }
-}
-        </style>
+        @media (min-width: 640px) {
+            .mm-cat-head-img { width: 84px; height: 84px; border-radius: 20px; }
+            .mm-cat-head-title { font-size: 26px; }
+        }
+    </style>
 </head>
 
 <body>
@@ -334,7 +363,7 @@ $categoryImage = $category ? categoryImageUrl($category['category_image'] ?? '')
 
 
     <div id="mmToast"></div>
-    <?php include_once './includes/footer.php'; ?> 
+    <?php include_once './includes/footer.php'; ?>
 
     <!-- ================= GLOBALS ================= -->
     <script>
@@ -342,6 +371,13 @@ $categoryImage = $category ? categoryImageUrl($category['category_image'] ?? '')
         window.ADMIN_URL = "<?= ADMIN_URL ?>";
         window.IS_LOGGED_IN = <?= $customerLoggedIn ? 'true' : 'false' ?>;
         window.CART_COUNT = <?= (int)$cartCount ?>;
+        window.CART_TOTAL = <?= (float)$cartTotal ?>;
+        window.CUSTOMER = {
+            id:     <?= (int)$customerRowId ?>,
+            code:   "<?= htmlspecialchars($customerCode,   ENT_QUOTES) ?>",
+            name:   "<?= htmlspecialchars($customerName,   ENT_QUOTES) ?>",
+            mobile: "<?= htmlspecialchars($customerMobile, ENT_QUOTES) ?>"
+        };
     </script>
 
     <script>
