@@ -22,7 +22,8 @@ if ($customerId > 0) {
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         $cartCount = (int)$row['c'];
         $cartTotal = (float)$row['t'];
-    } catch (PDOException $e) {}
+    } catch (PDOException $e) {
+    }
 } else {
     if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
         foreach ($_SESSION['cart'] as $c) {
@@ -33,8 +34,8 @@ if ($customerId > 0) {
     }
 }
 ?>
-<a href="<?= MAIN_URL ?>cart.php" class="mm-cart-bar" id="stickyCartBar" aria-label="Go to cart"
-   style="<?= $cartCount > 0 ? 'display:flex;' : '' ?>">
+<a href="<?= MAIN_URL ?>checkout.php" class="mm-cart-bar" id="stickyCartBar" aria-label="Go to cart"
+    style="<?= $cartCount > 0 ? 'display:flex;' : '' ?>">
     <div class="mm-cart-left">
         <span class="mm-cart-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

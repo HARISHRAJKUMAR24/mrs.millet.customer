@@ -7,6 +7,7 @@
      customer_id         varchar(20)   MRSMCxxxxx
      address_type        enum('apartment','individual_house','pickup')
      address_json        longtext      JSON blob
+     order_note          varchar(500)  optional instruction
 
    order_containers.customer_id  → int(11)  (customers.id)
 
@@ -38,6 +39,7 @@ $walletApplied   = 0.0;
 $totalContainers = 0;
 $containerAmount = 0.0;
 $deliveryBoyId   = null;
+$orderNote       = '';
 
 /* ---------- INPUT ---------- */
 $payment_id       = trim($_POST['razorpay_payment_id'] ?? '');
@@ -56,6 +58,10 @@ $mapLink          = trim($_POST['map_link']          ?? '');
 $pickupBranchId   = (int)($_POST['pickup_branch_id'] ?? 0);
 $pickupBranchName = trim($_POST['pickup_branch_name'] ?? '');
 $walletRequested  = (float)($_POST['wallet_applied'] ?? 0);
+
+/* ---------- ORDER NOTE ---------- */
+$orderNote = trim($_POST['order_note'] ?? '');
+if (mb_strlen($orderNote) > 500) $orderNote = mb_substr($orderNote, 0, 500);
 
 if ($name === '' || !preg_match('/^[0-9]{10,15}$/', $mobile)) {
     jsonResponse(false, 'Invalid customer details.');
@@ -109,7 +115,6 @@ if ($deliveryMode === 'delivery') {
 
     if ($addressType === 'individual_house') {
 
-        /* ---------- INDIVIDUAL HOUSE ---------- */
         if ($fullAddress === '') jsonResponse(false, 'Address is missing for this order.');
 
         $houseImage = '';
@@ -130,7 +135,6 @@ if ($deliveryMode === 'delivery') {
 
         $resolvedCode = 'IH_' . substr(md5(trim($fullAddress)), 0, 12);
 
-        /* reset apartment fields */
         $apartmentId           = 0;
         $apartmentCode         = '';
         $apartmentName         = '';
@@ -140,7 +144,6 @@ if ($deliveryMode === 'delivery') {
 
     } else {
 
-        /* ---------- APARTMENT ---------- */
         if ($apartmentId <= 0 || $division === '') {
             jsonResponse(false, 'Invalid apartment or division.');
         }
@@ -155,7 +158,6 @@ if ($deliveryMode === 'delivery') {
         $apartmentCode = $apt['apartment_code'];
         $apartmentName = $apt['apartment_name'];
 
-        /* Parse block / door / floor from division label */
         $block = ''; $door = ''; $floor = '';
         foreach (array_map('trim', explode('/', $division)) as $p) {
             if (stripos($p, 'Blk ')    === 0) $block = trim(substr($p, 4));
@@ -179,7 +181,6 @@ if ($deliveryMode === 'delivery') {
     }
 
 } else {
-    /* ---------- PICKUP ---------- */
     if ($pickupBranchId <= 0) jsonResponse(false, 'Please select a pickup branch.');
 
     $bStmt = $pdo->prepare("SELECT branch_name FROM settings_branches WHERE id = ? LIMIT 1");
@@ -344,7 +345,6 @@ $stockStmt = $pdo->prepare(
      WHERE menu_code = ? AND variant_id = ? AND stock_unlimited = 0"
 );
 
-/* order_items table optional */
 $hasOrderItems = false;
 try {
     $tblCheck = $pdo->query("SHOW TABLES LIKE 'order_items'");
@@ -393,7 +393,7 @@ try {
         } catch (PDOException $e) {}
     }
 
-    /* Insert order — uses ONLY real columns */
+    /* Insert order — includes order_note */
     $ins = $pdo->prepare(
         "INSERT INTO orders
             (order_code, customer_id, delivery_boy_id,
@@ -403,6 +403,7 @@ try {
              division_charge,
              tax_amount, tax_rate, tax_type,
              subtotal, total_amount, products_json,
+             order_note,
              status, delivery_status, payment_status, payment_ref, paid_at, created_at)
          VALUES
             (?, ?, ?,
@@ -412,14 +413,15 @@ try {
              ?,
              ?, ?, ?,
              ?, ?, ?,
+             ?,
              'pending', 'disabled', ?, ?, ?, NOW())"
     );
 
     $ins->execute([
         $orderCode,
-        $customerCode,           // varchar MRSMCxxxxx
+        $customerCode,
         $deliveryBoyId,
-        $addressType,            // 'apartment' | 'individual_house' | 'pickup'
+        $addressType,
         $addressJsonFinal,
         $deliveryMode,
         $pickupBranchId > 0 ? $pickupBranchId : null,
@@ -431,6 +433,7 @@ try {
         $subtotal,
         $grossTotal,
         json_encode($items, JSON_UNESCAPED_UNICODE),
+        $orderNote !== '' ? $orderNote : null,
         $paymentStatus,
         $payment_id !== '' ? $payment_id : null,
         $paymentStatus === 'paid' ? date('Y-m-d H:i:s') : null,
@@ -477,7 +480,7 @@ try {
         }
     }
 
-    /* Container row — customer_id is INT (customers.id) */
+    /* Container row */
     if ($totalContainers > 0) {
         try {
             $cIns = $pdo->prepare(
@@ -525,4 +528,5 @@ jsonResponse(true, 'Order placed.', [
     'container_amount' => $containerAmount,
     'mode'             => $deliveryMode,
     'delivery_boy_id'  => $deliveryBoyId,
+    'order_note'       => $orderNote,
 ]);

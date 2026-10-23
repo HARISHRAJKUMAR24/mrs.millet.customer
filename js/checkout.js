@@ -177,15 +177,12 @@
 
     /* ---------- RESTORE READ-ONLY ADDRESS ---------- */
     function restoreCustomerAddress() {
-        /* Individual house */
         if (ADDRESS_TYPE === "individual_house") {
-            /* nothing to restore — hidden inputs already there */
             deliveryCharge = 0;
             updateTotals();
             return;
         }
 
-        /* Apartment read-only */
         const aptId = Number(window.CUSTOMER_APARTMENT_ID || 0);
         const savedDiv = String(window.CUSTOMER_DIVISION || "");
         const savedChg = Number(window.CUSTOMER_DIVISION_CHARGE || 0);
@@ -448,6 +445,9 @@
         const mobile = mobileInput.value.trim();
         const name = nameInput.value.trim();
 
+        // NEW: order note
+        const orderNote = (document.getElementById("coOrderNote")?.value || "").trim().slice(0, 500);
+
         if (!/^[0-9]{10,15}$/.test(mobile)) { showToast("Enter a valid mobile number.", "error"); mobileInput.focus(); return; }
         if (name.length < 3) { showToast("Please enter your name.", "error"); nameInput.focus(); return; }
 
@@ -528,6 +528,7 @@
             wallet_applied: walletUsable,
             container_amount: containerTotal,
             total: foodPlusDelivery,
+            order_note: orderNote,
         };
 
         /* Fully covered by wallet → place directly */
