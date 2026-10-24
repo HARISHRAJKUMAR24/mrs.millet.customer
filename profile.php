@@ -21,10 +21,7 @@ if (!$customerLoggedIn) {
 $customerId = (int)$_SESSION['customer_id'];
 
 /* =========================================================
-   LOAD CUSTOMER (current schema)
-   customers: id, customer_id, full_name, mobile_number,
-              address_type, address_json, wallet_balance,
-              profile_completed, status, created_at
+   LOAD CUSTOMER
    ========================================================= */
 $customer = null;
 try {
@@ -48,7 +45,6 @@ if (!$customer) {
     exit;
 }
 
-/* Decode address_json once */
 $custAddress     = [];
 if (!empty($customer['address_json'])) {
     $decoded = json_decode($customer['address_json'], true);
@@ -62,7 +58,6 @@ $customerWallet   = (float)$customer['wallet_balance'];
 $customerJoined   = $customer['created_at'];
 $customerAddressType = $customer['address_type'] ?: 'apartment';
 
-/* Address fields — apartment OR individual house */
 $customerAptId       = (int)($custAddress['apartment_id']    ?? 0);
 $customerAptCode     = $custAddress['apartment_code'] ?? '';
 $customerAptName     = $custAddress['apartment_name'] ?? '';
@@ -77,28 +72,23 @@ $customerHouseImage  = $custAddress['house_image']   ?? '';
    ========================================================= */
 $kpi = [
     'orders'              => 0,
-    'spent'               => 0,
     'containers_held'     => 0,
     'containers_returned' => 0,
     'containers_total'    => 0,
 ];
 
-/* Orders — filter by orders.customer_id = MRSMCxxxxx (varchar) */
 try {
     $row = $pdo->prepare(
-        "SELECT COUNT(*) AS cnt,
-                COALESCE(SUM(total_amount),0) AS spent
+        "SELECT COUNT(*) AS cnt
          FROM orders
          WHERE customer_id = ? AND status <> 'cancelled'"
     );
     $row->execute([$customerCode]);
     $r = $row->fetch(PDO::FETCH_ASSOC);
     $kpi['orders'] = (int)($r['cnt'] ?? 0);
-    $kpi['spent']  = (float)($r['spent'] ?? 0);
 } catch (PDOException $e) {
 }
 
-/* Containers — order_containers.customer_id is INT (customers.id) */
 try {
     $row = $pdo->prepare(
         "SELECT COALESCE(SUM(total_containers),0) AS total_c,
@@ -186,20 +176,28 @@ try {
 }
 
 /* =========================================================
-   RECENT ORDERS
-   Filter by orders.customer_id = MRSMCxxxxx
+   RECENT ORDERS (with full details for popup)
    ========================================================= */
 $recentOrders = [];
 try {
     $stmt = $pdo->prepare(
-        "SELECT o.order_code,
+        "SELECT o.id,
+                o.order_code,
                 o.total_amount,
+                o.subtotal,
+                o.division_charge,
+                o.tax_amount,
+                o.tax_rate,
+                o.tax_type,
                 o.status,
                 o.payment_status,
                 o.delivery_status,
                 o.delivery_mode,
+                o.pickup_branch_name,
                 o.address_type,
                 o.address_json,
+                o.products_json,
+                o.order_note,
                 o.created_at,
                 o.delivery_boy_id,
                 b.full_name     AS delivery_boy_name,
@@ -212,6 +210,16 @@ try {
     );
     $stmt->execute([$customerCode]);
     $recentOrders = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    /* Decode products + address for the popup */
+    foreach ($recentOrders as &$o) {
+        $prods = json_decode($o['products_json'] ?? '[]', true);
+        $o['products'] = is_array($prods) ? $prods : [];
+
+        $addr = json_decode($o['address_json'] ?? '[]', true);
+        $o['address'] = is_array($addr) ? $addr : [];
+    }
+    unset($o);
 } catch (PDOException $e) {
 }
 
@@ -300,7 +308,6 @@ function renderPager($baseUrl, $pageParam, $current, $totalPages)
 
 $initials = initials($customerName);
 
-/* Cart (from customer_cart) */
 $cartCount = 0;
 $cartTotal = 0;
 try {
@@ -426,15 +433,10 @@ try {
 
         .pf-kpis {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(2, 1fr);
             gap: 14px;
             margin-bottom: 22px;
-        }
-
-        @media (max-width: 900px) {
-            .pf-kpis {
-                grid-template-columns: repeat(2, 1fr);
-            }
+            max-width: 600px;
         }
 
         @media (max-width: 480px) {
@@ -469,16 +471,6 @@ try {
             color: #1b5e20;
         }
 
-        .pf-kpi-icon.gold {
-            background: #fdf1e2;
-            color: #b8893c;
-        }
-
-        .pf-kpi-icon.red {
-            background: #fdeaea;
-            color: #b51f2c;
-        }
-
         .pf-kpi-icon.blue {
             background: #e5eefb;
             color: #1565c0;
@@ -503,14 +495,6 @@ try {
 
         .pf-kpi-value.green {
             color: #1b5e20;
-        }
-
-        .pf-kpi-value.gold {
-            color: #b8893c;
-        }
-
-        .pf-kpi-value.red {
-            color: #b51f2c;
         }
 
         .pf-tabs {
@@ -538,7 +522,7 @@ try {
             color: #6f675f;
             cursor: pointer;
             white-space: nowrap;
-            transition: color .18s ease, background .18s ease, box-shadow .18s ease;
+            transition: .18s ease;
             outline: none;
         }
 
@@ -625,7 +609,7 @@ try {
             font-weight: 600;
             color: #302923;
             outline: none;
-            transition: border-color .2s ease, box-shadow .2s ease;
+            transition: .2s ease;
         }
 
         .pf-input:focus {
@@ -663,7 +647,7 @@ try {
             justify-content: center;
             font-size: 16px;
             cursor: pointer;
-            transition: color .15s ease, background .15s ease;
+            transition: .15s ease;
         }
 
         .pf-eye-btn:hover {
@@ -764,6 +748,10 @@ try {
 
         .pf-table tbody tr:hover {
             background: #fdfaf4;
+        }
+
+        .pf-table tbody tr.clickable {
+            cursor: pointer;
         }
 
         .pf-badge {
@@ -1035,6 +1023,265 @@ try {
             letter-spacing: .03em;
         }
 
+        /* ORDER DETAILS MODAL */
+        .pf-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(30, 25, 22, .55);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 9999;
+            opacity: 0;
+            visibility: hidden;
+            transition: .22s ease;
+            overflow-y: auto;
+        }
+
+        .pf-modal-overlay.show {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .pf-modal {
+            background: #fff;
+            border-radius: 20px;
+            max-width: 560px;
+            width: 100%;
+            box-shadow: 0 30px 80px rgba(0, 0, 0, .28);
+            transform: translateY(15px) scale(.96);
+            transition: transform .25s cubic-bezier(.2, .9, .3, 1.2);
+            position: relative;
+            margin: auto;
+            max-height: 92vh;
+            overflow-y: auto;
+        }
+
+        .pf-modal-overlay.show .pf-modal {
+            transform: translateY(0) scale(1);
+        }
+
+        .pf-modal-head {
+            padding: 20px 22px 16px;
+            border-bottom: 1.5px solid #f0ebe4;
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            position: sticky;
+            top: 0;
+            background: #fff;
+            z-index: 2;
+            border-radius: 20px 20px 0 0;
+        }
+
+        .pf-modal-head h3 {
+            margin: 0 0 4px;
+            font-family: "Playfair Display", serif;
+            font-size: 18px;
+            font-weight: 700;
+            color: #302923;
+        }
+
+        .pf-modal-head p {
+            margin: 0;
+            font-size: 11.5px;
+            color: #948c82;
+            font-weight: 600;
+        }
+
+        .pf-modal-close {
+            width: 34px;
+            height: 34px;
+            border-radius: 9px;
+            border: 1.5px solid #e4ddd3;
+            background: #fff;
+            color: #6f675f;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .pf-modal-close:hover {
+            background: #fbeaea;
+            color: #b51f2c;
+            border-color: #f1c8cc;
+        }
+
+        .pf-modal-body {
+            padding: 20px 22px 22px;
+        }
+
+        .pf-modal-section {
+            margin-bottom: 20px;
+        }
+
+        .pf-modal-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .pf-modal-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 10.5px;
+            font-weight: 800;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            color: #948c82;
+            margin: 0 0 10px;
+        }
+
+        .pf-modal-title i {
+            color: #b51f2c;
+            font-size: 12px;
+        }
+
+        .pf-modal-info {
+            background: #fdfaf4;
+            border: 1px solid #f0ebe4;
+            border-radius: 12px;
+            padding: 12px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .pf-modal-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 12.5px;
+        }
+
+        .pf-modal-row .lbl {
+            color: #948c82;
+            font-weight: 600;
+        }
+
+        .pf-modal-row .val {
+            color: #302923;
+            font-weight: 700;
+            text-align: right;
+            word-break: break-word;
+        }
+
+        .pf-modal-products {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .pf-modal-prod {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px;
+            background: #fdfaf4;
+            border-radius: 10px;
+            border: 1px solid #f0ebe4;
+        }
+
+        .pf-modal-thumb {
+            width: 46px;
+            height: 46px;
+            border-radius: 10px;
+            background: #f7efe3;
+            overflow: hidden;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+        }
+
+        .pf-modal-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .pf-modal-prod-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .pf-modal-prod-name {
+            font-size: 12.5px;
+            font-weight: 700;
+            color: #302923;
+            margin: 0;
+            line-height: 1.3;
+        }
+
+        .pf-modal-prod-meta {
+            font-size: 10.5px;
+            color: #948c82;
+            margin: 2px 0 0;
+            font-weight: 600;
+        }
+
+        .pf-modal-prod-total {
+            font-family: "Playfair Display", serif;
+            font-size: 13.5px;
+            font-weight: 700;
+            color: #b51f2c;
+            white-space: nowrap;
+        }
+
+        .pf-modal-totals {
+            background: #fdfaf4;
+            border: 1px solid #f0ebe4;
+            border-radius: 12px;
+            padding: 12px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .pf-modal-trow {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12.5px;
+            color: #6f675f;
+            font-weight: 600;
+        }
+
+        .pf-modal-trow strong {
+            color: #302923;
+            font-weight: 800;
+        }
+
+        .pf-modal-trow.grand {
+            padding-top: 8px;
+            margin-top: 4px;
+            border-top: 1.5px dashed #e4ddd3;
+            font-size: 14px;
+        }
+
+        .pf-modal-trow.grand strong {
+            color: #b51f2c;
+            font-family: "Playfair Display", serif;
+            font-size: 17px;
+        }
+
+        .pf-modal-note {
+            padding: 10px 14px;
+            background: #fff8e6;
+            border: 1.5px dashed #f0dca0;
+            border-radius: 10px;
+            font-size: 12px;
+            color: #8a6a1e;
+            font-weight: 600;
+            line-height: 1.5;
+        }
+
         #mmToast {
             position: fixed;
             top: 24px;
@@ -1055,8 +1302,8 @@ try {
             opacity: 0;
             transform: translateX(30px);
             pointer-events: none;
-            transition: opacity .28s ease, transform .28s cubic-bezier(.2, .9, .3, 1.1);
-            z-index: 9999;
+            transition: .28s ease;
+            z-index: 99999;
             max-width: 340px;
             line-height: 1.4;
         }
@@ -1119,7 +1366,6 @@ try {
                             <h1><?= htmlspecialchars($customerName) ?></h1>
                             <p><?= htmlspecialchars($customerMobile) ?></p>
                             <div class="pf-header-meta">
-
                                 <?php if ($customerAddressType === 'individual_house' && $customerFullAddress !== ''): ?>
                                     <span class="pf-chip" style="background:rgba(255,255,255,.22);">
                                         <i class="bi bi-house-door"></i>
@@ -1134,7 +1380,6 @@ try {
                                         <?php endif; ?>
                                     </span>
                                 <?php endif; ?>
-
                                 <span class="pf-chip">
                                     <i class="bi bi-calendar3"></i>
                                     Joined <?= htmlspecialchars(shortDate($customerJoined)) ?>
@@ -1145,7 +1390,7 @@ try {
                 </div>
 
 
-                <!-- KPI STRIP -->
+                <!-- KPI STRIP (only 2) -->
                 <div class="pf-kpis">
                     <div class="pf-kpi">
                         <div class="pf-kpi-icon blue"><i class="bi bi-bag-check"></i></div>
@@ -1161,111 +1406,62 @@ try {
                             <div class="pf-kpi-value green"><?= rupees($customerWallet) ?></div>
                         </div>
                     </div>
-                    <div class="pf-kpi">
-                        <div class="pf-kpi-icon red"><i class="bi bi-cash-coin"></i></div>
-                        <div>
-                            <div class="pf-kpi-label">Total Spent</div>
-                            <div class="pf-kpi-value red"><?= rupees($kpi['spent']) ?></div>
-                        </div>
-                    </div>
-                    <div class="pf-kpi">
-                        <div class="pf-kpi-icon gold"><i class="bi bi-box2-heart"></i></div>
-                        <div>
-                            <div class="pf-kpi-label">Containers Held</div>
-                            <div class="pf-kpi-value gold"><?= (int)$kpi['containers_held'] ?></div>
-                        </div>
-                    </div>
                 </div>
 
 
                 <!-- TABS -->
                 <div class="pf-tabs">
-                    <button type="button" class="pf-tab active" data-tab="overview">
-                        <i class="bi bi-person-circle"></i> Overview
-                    </button>
-                    <button type="button" class="pf-tab" data-tab="orders">
-                        <i class="bi bi-bag-check"></i> Orders
-                    </button>
-                    <button type="button" class="pf-tab" data-tab="wallet">
-                        <i class="bi bi-wallet2"></i> Wallet History
-                    </button>
-                    <button type="button" class="pf-tab" data-tab="containers">
-                        <i class="bi bi-box2-heart"></i> Containers
-                    </button>
-                    <button type="button" class="pf-tab" data-tab="security">
-                        <i class="bi bi-shield-lock"></i> Security
-                    </button>
+                    <button type="button" class="pf-tab active" data-tab="overview"><i class="bi bi-person-circle"></i> Overview</button>
+                    <button type="button" class="pf-tab" data-tab="orders"><i class="bi bi-bag-check"></i> Orders</button>
+                    <button type="button" class="pf-tab" data-tab="wallet"><i class="bi bi-wallet2"></i> Wallet History</button>
+                    <button type="button" class="pf-tab" data-tab="containers"><i class="bi bi-box2-heart"></i> Containers</button>
+                    <button type="button" class="pf-tab" data-tab="security"><i class="bi bi-shield-lock"></i> Security</button>
                 </div>
 
 
                 <!-- ============== OVERVIEW ============== -->
                 <div class="pf-panel active" id="panel-overview">
-
                     <div class="pf-card">
-                        <h2 class="pf-card-title">
-                            <i class="bi bi-person-gear"></i>
-                            Profile Details
-                        </h2>
+                        <h2 class="pf-card-title"><i class="bi bi-person-gear"></i> Profile Details</h2>
 
                         <form id="profileForm">
                             <div class="pf-grid-2">
                                 <div class="pf-field">
                                     <label>Full Name</label>
-                                    <input type="text" id="pfName" class="pf-input"
-                                        value="<?= htmlspecialchars($customerName) ?>"
-                                        maxlength="150" required>
+                                    <input type="text" id="pfName" class="pf-input" value="<?= htmlspecialchars($customerName) ?>" maxlength="150" required>
                                 </div>
-
                                 <div class="pf-field">
                                     <label>Mobile Number</label>
-                                    <input type="tel" class="pf-input"
-                                        value="<?= htmlspecialchars($customerMobile) ?>"
-                                        disabled>
+                                    <input type="tel" class="pf-input" value="<?= htmlspecialchars($customerMobile) ?>" disabled>
                                 </div>
                             </div>
 
                             <?php if ($customerAddressType === 'individual_house'): ?>
-
                                 <div class="pf-field">
                                     <label>Full Address</label>
-                                    <input type="text" class="pf-input"
-                                        value="<?= htmlspecialchars($customerFullAddress) ?>"
-                                        disabled>
+                                    <input type="text" class="pf-input" value="<?= htmlspecialchars($customerFullAddress) ?>" disabled>
                                 </div>
-
                                 <?php if ($customerMapLink !== ''): ?>
                                     <div class="pf-field">
                                         <label>Google Maps Link</label>
-                                        <input type="text" class="pf-input"
-                                            value="<?= htmlspecialchars($customerMapLink) ?>"
-                                            disabled>
+                                        <input type="text" class="pf-input" value="<?= htmlspecialchars($customerMapLink) ?>" disabled>
                                     </div>
                                 <?php endif; ?>
-
                                 <div style="padding:12px 14px;border-radius:11px;background:#eef7f0;border:1px dashed #c9e3ce;font-size:12px;color:#2e7d32;font-weight:700;line-height:1.6;">
-                                    <i class="bi bi-house-door"></i>
-                                    Your individual house address is locked. Contact support to update it.
+                                    <i class="bi bi-house-door"></i> Your individual house address is locked. Contact support to update it.
                                 </div>
-
                             <?php else: ?>
-
                                 <div class="pf-grid-2">
                                     <div class="pf-field" style="position:relative;">
                                         <label>Apartment</label>
                                         <div style="position:relative;">
                                             <i class="bi bi-search" style="position:absolute;left:14px;top:50%;transform:translateY(-50%);color:#b0a79c;font-size:15px;pointer-events:none;"></i>
-                                            <input type="text" id="pfAptSearch" class="pf-input"
-                                                style="padding-left:40px;padding-right:40px;"
-                                                placeholder="Search apartment by name or code..."
-                                                value="<?= htmlspecialchars($customerAptName) ?>"
-                                                autocomplete="off">
+                                            <input type="text" id="pfAptSearch" class="pf-input" style="padding-left:40px;padding-right:40px;" placeholder="Search apartment..." value="<?= htmlspecialchars($customerAptName) ?>" autocomplete="off">
                                             <i class="bi bi-chevron-down" style="position:absolute;right:14px;top:50%;transform:translateY(-50%);color:#b0a79c;font-size:12px;pointer-events:none;"></i>
                                         </div>
                                         <input type="hidden" id="pfAptId" value="<?= (int)$customerAptId ?>">
                                         <input type="hidden" id="pfAptCode" value="<?= htmlspecialchars($customerAptCode) ?>">
-                                        <div id="pfAptResults"
-                                            style="position:absolute;top:calc(100% + 6px);left:0;right:0;background:#fff;border:1.5px solid #ece5da;border-radius:14px;box-shadow:0 20px 40px rgba(48,41,35,.14);z-index:30;max-height:280px;overflow-y:auto;display:none;">
-                                        </div>
+                                        <div id="pfAptResults" style="position:absolute;top:calc(100% + 6px);left:0;right:0;background:#fff;border:1.5px solid #ece5da;border-radius:14px;box-shadow:0 20px 40px rgba(48,41,35,.14);z-index:30;max-height:280px;overflow-y:auto;display:none;"></div>
                                     </div>
 
                                     <div class="pf-field" id="pfDivField" style="<?= $customerAptId > 0 ? '' : 'display:none;' ?>">
@@ -1299,12 +1495,8 @@ try {
                             <?php endif; ?>
 
                             <div style="display:flex;gap:10px;margin-top:6px;flex-wrap:wrap;">
-                                <button type="submit" class="pf-btn pf-btn-primary">
-                                    <i class="bi bi-check-lg"></i> Save Changes
-                                </button>
-                                <button type="button" class="pf-btn pf-btn-ghost" id="pfResetBtn">
-                                    <i class="bi bi-arrow-counterclockwise"></i> Reset
-                                </button>
+                                <button type="submit" class="pf-btn pf-btn-primary"><i class="bi bi-check-lg"></i> Save Changes</button>
+                                <button type="button" class="pf-btn pf-btn-ghost" id="pfResetBtn"><i class="bi bi-arrow-counterclockwise"></i> Reset</button>
                             </div>
                         </form>
                     </div>
@@ -1314,10 +1506,7 @@ try {
                 <!-- ============== ORDERS ============== -->
                 <div class="pf-panel" id="panel-orders">
                     <div class="pf-card">
-                        <h2 class="pf-card-title">
-                            <i class="bi bi-bag-check"></i>
-                            Recent Orders
-                        </h2>
+                        <h2 class="pf-card-title"><i class="bi bi-bag-check"></i> Recent Orders</h2>
 
                         <?php if (empty($recentOrders)): ?>
                             <div class="pf-empty">
@@ -1338,49 +1527,33 @@ try {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <?php foreach ($recentOrders as $o):
+                                        <?php foreach ($recentOrders as $index => $o):
                                             $s       = strtolower($o['status']);
                                             $p       = strtolower($o['payment_status']);
                                             $mode    = strtolower($o['delivery_mode'] ?? 'delivery');
                                             $atype   = $o['address_type'] ?? 'apartment';
                                             $boyName = trim($o['delivery_boy_name'] ?? '');
                                             $boyCode = trim($o['delivery_boy_code'] ?? '');
-                                            $oa      = json_decode($o['address_json'] ?? '[]', true);
-                                            if (!is_array($oa)) $oa = [];
                                         ?>
-                                            <tr>
+                                            <tr class="clickable js-order-row" data-order-index="<?= $index ?>">
                                                 <td>
                                                     <strong>#<?= htmlspecialchars($o['order_code']) ?></strong>
                                                     <?php if ($atype === 'individual_house'): ?>
                                                         <div style="margin-top:4px;">
-                                                            <span class="pf-badge individual">
-                                                                <i class="bi bi-house-door"></i> Individual House
-                                                            </span>
+                                                            <span class="pf-badge individual"><i class="bi bi-house-door"></i> Individual House</span>
                                                         </div>
                                                     <?php endif; ?>
                                                 </td>
                                                 <td><?= htmlspecialchars(shortDate($o['created_at'])) ?></td>
                                                 <td class="pf-amount"><?= rupees($o['total_amount']) ?></td>
-                                                <td>
-                                                    <span class="pf-badge <?= htmlspecialchars($s) ?>">
-                                                        <?= htmlspecialchars(ucfirst($s)) ?>
-                                                    </span>
-                                                </td>
-                                                <td>
-                                                    <span class="pf-badge <?= $p === 'paid' ? 'received' : 'pending' ?>">
-                                                        <?= htmlspecialchars(ucfirst($p)) ?>
-                                                    </span>
-                                                </td>
+                                                <td><span class="pf-badge <?= htmlspecialchars($s) ?>"><?= htmlspecialchars(ucfirst($s)) ?></span></td>
+                                                <td><span class="pf-badge <?= $p === 'paid' ? 'received' : 'pending' ?>"><?= htmlspecialchars(ucfirst($p)) ?></span></td>
                                                 <td>
                                                     <?php if ($mode === 'pickup'): ?>
-                                                        <span class="pf-dboy-pickup">
-                                                            <i class="bi bi-shop"></i> Store Pickup
-                                                        </span>
+                                                        <span class="pf-dboy-pickup"><i class="bi bi-shop"></i> Store Pickup</span>
                                                     <?php elseif ($boyName !== ''): ?>
                                                         <div class="pf-dboy">
-                                                            <div class="pf-dboy-avatar">
-                                                                <?= htmlspecialchars(strtoupper(substr($boyName, 0, 1))) ?>
-                                                            </div>
+                                                            <div class="pf-dboy-avatar"><?= htmlspecialchars(strtoupper(substr($boyName, 0, 1))) ?></div>
                                                             <div class="pf-dboy-info">
                                                                 <div class="pf-dboy-name"><?= htmlspecialchars($boyName) ?></div>
                                                                 <?php if ($boyCode !== ''): ?>
@@ -1389,9 +1562,7 @@ try {
                                                             </div>
                                                         </div>
                                                     <?php else: ?>
-                                                        <span class="pf-dboy-empty">
-                                                            <i class="bi bi-dash-circle"></i> Not assigned
-                                                        </span>
+                                                        <span class="pf-dboy-empty"><i class="bi bi-dash-circle"></i> Not assigned</span>
                                                     <?php endif; ?>
                                                 </td>
                                             </tr>
@@ -1424,16 +1595,10 @@ try {
                     </div>
 
                     <div class="pf-card">
-                        <h2 class="pf-card-title">
-                            <i class="bi bi-receipt"></i>
-                            Wallet Transactions
-                        </h2>
+                        <h2 class="pf-card-title"><i class="bi bi-receipt"></i> Wallet Transactions</h2>
 
                         <?php if (empty($walletTxns)): ?>
-                            <div class="pf-empty">
-                                <i class="bi bi-wallet2"></i>
-                                No wallet transactions yet.
-                            </div>
+                            <div class="pf-empty"><i class="bi bi-wallet2"></i> No wallet transactions yet.</div>
                         <?php else: ?>
                             <div class="pf-table-wrap">
                                 <table class="pf-table">
@@ -1454,38 +1619,15 @@ try {
                                             $type = strtolower($t['txn_type']);
                                         ?>
                                             <tr>
-                                                <td>
-                                                    <span class="pf-txn-code"><?= htmlspecialchars($t['txn_code']) ?></span>
+                                                <td><span class="pf-txn-code"><?= htmlspecialchars($t['txn_code']) ?></span></td>
+                                                <td><?= htmlspecialchars(shortDate($t['created_at'])) ?><div style="font-size:10.5px;color:#948c82;"><?= htmlspecialchars(shortTime($t['created_at'])) ?></div>
                                                 </td>
-                                                <td>
-                                                    <?= htmlspecialchars(shortDate($t['created_at'])) ?>
-                                                    <div style="font-size:10.5px;color:#948c82;"><?= htmlspecialchars(shortTime($t['created_at'])) ?></div>
-                                                </td>
-                                                <td>
-                                                    <span class="pf-badge <?= $type === 'credit' ? 'credit' : 'debit' ?>">
-                                                        <i class="bi bi-<?= $type === 'credit' ? 'plus-circle-fill' : 'dash-circle-fill' ?>"></i>
-                                                        <?= htmlspecialchars(ucfirst($type)) ?>
-                                                    </span>
-                                                </td>
-                                                <td class="pf-amount <?= $type === 'credit' ? 'credit' : 'debit' ?>">
-                                                    <?= $type === 'credit' ? '+' : '−' ?><?= rupees($t['amount']) ?>
-                                                </td>
+                                                <td><span class="pf-badge <?= $type === 'credit' ? 'credit' : 'debit' ?>"><i class="bi bi-<?= $type === 'credit' ? 'plus-circle-fill' : 'dash-circle-fill' ?>"></i> <?= htmlspecialchars(ucfirst($type)) ?></span></td>
+                                                <td class="pf-amount <?= $type === 'credit' ? 'credit' : 'debit' ?>"><?= $type === 'credit' ? '+' : '−' ?><?= rupees($t['amount']) ?></td>
                                                 <td><?= rupees($t['balance_before']) ?></td>
                                                 <td><strong><?= rupees($t['balance_after']) ?></strong></td>
-                                                <td>
-                                                    <span style="font-size:11px;color:#948c82;font-weight:700;">
-                                                        <?= htmlspecialchars(ucfirst($t['source'])) ?>
-                                                    </span>
-                                                </td>
-                                                <td>
-                                                    <?php if (!empty($t['note'])): ?>
-                                                        <span class="pf-note" title="<?= htmlspecialchars($t['note']) ?>">
-                                                            <?= htmlspecialchars($t['note']) ?>
-                                                        </span>
-                                                    <?php else: ?>
-                                                        <span style="color:#c8bfb4;">—</span>
-                                                    <?php endif; ?>
-                                                </td>
+                                                <td><span style="font-size:11px;color:#948c82;font-weight:700;"><?= htmlspecialchars(ucfirst($t['source'])) ?></span></td>
+                                                <td><?php if (!empty($t['note'])): ?><span class="pf-note" title="<?= htmlspecialchars($t['note']) ?>"><?= htmlspecialchars($t['note']) ?></span><?php else: ?><span style="color:#c8bfb4;">—</span><?php endif; ?></td>
                                             </tr>
                                         <?php endforeach; ?>
                                     </tbody>
@@ -1494,10 +1636,7 @@ try {
 
                             <?php if ($walletTotalPages > 1): ?>
                                 <?php echo renderPager('?tab=wallet', 'wpage', $walletPage, $walletTotalPages); ?>
-                                <div class="pf-page-info">
-                                    Showing page <?= (int)$walletPage ?> of <?= (int)$walletTotalPages ?>
-                                    · <?= (int)$walletTotal ?> transaction<?= $walletTotal === 1 ? '' : 's' ?>
-                                </div>
+                                <div class="pf-page-info">Showing page <?= (int)$walletPage ?> of <?= (int)$walletTotalPages ?> · <?= (int)$walletTotal ?> transaction<?= $walletTotal === 1 ? '' : 's' ?></div>
                             <?php endif; ?>
                         <?php endif; ?>
                     </div>
@@ -1518,16 +1657,10 @@ try {
                     </div>
 
                     <div class="pf-card">
-                        <h2 class="pf-card-title">
-                            <i class="bi bi-box2-heart"></i>
-                            Container History
-                        </h2>
+                        <h2 class="pf-card-title"><i class="bi bi-box2-heart"></i> Container History</h2>
 
                         <?php if (empty($containers)): ?>
-                            <div class="pf-empty">
-                                <i class="bi bi-box2-heart"></i>
-                                No container history yet.
-                            </div>
+                            <div class="pf-empty"><i class="bi bi-box2-heart"></i> No container history yet.</div>
                         <?php else: ?>
                             <div class="pf-table-wrap">
                                 <table class="pf-table">
@@ -1550,29 +1683,15 @@ try {
                                             $st       = strtolower($c['status'] ?? 'not_received');
                                         ?>
                                             <tr>
-                                                <td>
-                                                    <strong>#<?= htmlspecialchars($c['order_code'] ?? ('ORD#' . $c['order_id'])) ?></strong>
-                                                </td>
+                                                <td><strong>#<?= htmlspecialchars($c['order_code'] ?? ('ORD#' . $c['order_id'])) ?></strong></td>
                                                 <td><?= $given ?></td>
                                                 <td><?= $returned ?></td>
-                                                <td>
-                                                    <strong style="color:<?= $held > 0 ? '#b51f2c' : '#1b5e20' ?>;">
-                                                        <?= $held ?>
-                                                    </strong>
-                                                </td>
+                                                <td><strong style="color:<?= $held > 0 ? '#b51f2c' : '#1b5e20' ?>;"><?= $held ?></strong></td>
                                                 <td><?= rupees($c['container_amount']) ?></td>
-                                                <td>
-                                                    <span class="pf-badge <?= htmlspecialchars($st) ?>">
-                                                        <?php
-                                                        if ($st === 'received') echo 'Returned';
-                                                        elseif ($st === 'partial') echo 'Partial';
-                                                        else echo 'Not Returned';
-                                                        ?>
-                                                    </span>
-                                                </td>
-                                                <td>
-                                                    <?= htmlspecialchars(shortDate($c['received_at'] ?: $c['created_at'])) ?>
-                                                </td>
+                                                <td><span class="pf-badge <?= htmlspecialchars($st) ?>"><?php if ($st === 'received') echo 'Returned';
+                                                                                                        elseif ($st === 'partial') echo 'Partial';
+                                                                                                        else echo 'Not Returned'; ?></span></td>
+                                                <td><?= htmlspecialchars(shortDate($c['received_at'] ?: $c['created_at'])) ?></td>
                                             </tr>
                                         <?php endforeach; ?>
                                     </tbody>
@@ -1581,15 +1700,11 @@ try {
 
                             <?php if ($containerTotalPages > 1): ?>
                                 <?php echo renderPager('?tab=containers', 'cpage', $containerPage, $containerTotalPages); ?>
-                                <div class="pf-page-info">
-                                    Showing page <?= (int)$containerPage ?> of <?= (int)$containerTotalPages ?>
-                                    · <?= (int)$containerTotal ?> container record<?= $containerTotal === 1 ? '' : 's' ?>
-                                </div>
+                                <div class="pf-page-info">Showing page <?= (int)$containerPage ?> of <?= (int)$containerTotalPages ?> · <?= (int)$containerTotal ?> container record<?= $containerTotal === 1 ? '' : 's' ?></div>
                             <?php endif; ?>
 
                             <div style="margin-top:16px;padding:14px 16px;border-radius:12px;background:#fdf7ec;border:1px dashed #e8d5a8;font-size:12px;color:#8a6a1e;font-weight:700;line-height:1.6;">
-                                <i class="bi bi-info-circle"></i>
-                                Container deposit is refundable. Return the containers to the delivery person to get the deposit back into your wallet.
+                                <i class="bi bi-info-circle"></i> Container deposit is refundable. Return the containers to the delivery person to get the deposit back into your wallet.
                             </div>
                         <?php endif; ?>
                     </div>
@@ -1599,32 +1714,22 @@ try {
                 <!-- ============== SECURITY ============== -->
                 <div class="pf-panel" id="panel-security">
                     <div class="pf-card">
-                        <h2 class="pf-card-title">
-                            <i class="bi bi-shield-lock"></i>
-                            Set New Password
-                        </h2>
+                        <h2 class="pf-card-title"><i class="bi bi-shield-lock"></i> Set New Password</h2>
 
                         <form id="passwordForm">
                             <div class="pf-grid-2">
                                 <div class="pf-field">
                                     <label>New Password</label>
                                     <div class="pf-pass-wrap">
-                                        <input type="password" id="pfNewPass" class="pf-input"
-                                            placeholder="At least 3 characters" autocomplete="new-password" required>
-                                        <button type="button" class="pf-eye-btn" data-eye="pfNewPass" aria-label="Show password">
-                                            <i class="bi bi-eye"></i>
-                                        </button>
+                                        <input type="password" id="pfNewPass" class="pf-input" placeholder="At least 3 characters" autocomplete="new-password" required>
+                                        <button type="button" class="pf-eye-btn" data-eye="pfNewPass" aria-label="Show password"><i class="bi bi-eye"></i></button>
                                     </div>
                                 </div>
-
                                 <div class="pf-field">
                                     <label>Confirm New Password</label>
                                     <div class="pf-pass-wrap">
-                                        <input type="password" id="pfConfirmPass" class="pf-input"
-                                            placeholder="Re-enter new password" autocomplete="new-password" required>
-                                        <button type="button" class="pf-eye-btn" data-eye="pfConfirmPass" aria-label="Show password">
-                                            <i class="bi bi-eye"></i>
-                                        </button>
+                                        <input type="password" id="pfConfirmPass" class="pf-input" placeholder="Re-enter new password" autocomplete="new-password" required>
+                                        <button type="button" class="pf-eye-btn" data-eye="pfConfirmPass" aria-label="Show password"><i class="bi bi-eye"></i></button>
                                     </div>
                                 </div>
                             </div>
@@ -1639,6 +1744,21 @@ try {
             </div>
         </div>
     </main>
+
+
+    <!-- ============ ORDER DETAILS MODAL ============ -->
+    <div class="pf-modal-overlay" id="pfOrderModal">
+        <div class="pf-modal">
+            <div class="pf-modal-head">
+                <div>
+                    <h3 id="pfModalOrderCode">#ORDER</h3>
+                    <p id="pfModalOrderDate">—</p>
+                </div>
+                <button type="button" class="pf-modal-close" id="pfModalClose"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="pf-modal-body" id="pfModalBody"></div>
+        </div>
+    </div>
 
 
     <?php include_once './includes/mobile-nav-bar.php'; ?>
@@ -1659,6 +1779,9 @@ try {
         window.APARTMENTS = <?= json_encode($apartments, JSON_UNESCAPED_UNICODE | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
         window.CURRENT_APARTMENT_ID = <?= (int)$customerAptId ?>;
         window.INITIAL_TAB = "<?= htmlspecialchars($_GET['tab'] ?? 'overview', ENT_QUOTES) ?>";
+
+        /* Orders data for popup */
+        window.ORDERS_DATA = <?= json_encode($recentOrders, JSON_UNESCAPED_UNICODE | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
     </script>
 
     <script src="<?= MAIN_URL ?>js/home.js"></script>

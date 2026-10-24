@@ -8,6 +8,7 @@
 
     var MAIN_URL = window.MAIN_URL || "./";
     var ADDRESS_TYPE = String(window.CUSTOMER_ADDRESS_TYPE || "apartment");
+    var ORDERS = Array.isArray(window.ORDERS_DATA) ? window.ORDERS_DATA : [];
 
     /* ---------------- Toast ---------------- */
     function showToast(msg, isErr) {
@@ -53,9 +54,8 @@
         }
     }
 
-
     /* =========================================================
-       APARTMENT DROPDOWN — only relevant for apartment customers
+       APARTMENT DROPDOWN
        ========================================================= */
     var aptSearch    = document.getElementById("pfAptSearch");
     var aptResults   = document.getElementById("pfAptResults");
@@ -126,8 +126,7 @@
         var currentId = String(aptIdInput ? aptIdInput.value : "");
 
         if (!list.length) {
-            aptResults.innerHTML =
-                '<div style="padding:16px;text-align:center;color:#948c82;font-size:12px;">' +
+            aptResults.innerHTML = '<div style="padding:16px;text-align:center;color:#948c82;font-size:12px;">' +
                 '<i class="bi bi-search" style="display:block;font-size:18px;color:#c8bfb4;margin-bottom:6px;"></i>' +
                 'No apartments found</div>';
         } else {
@@ -139,16 +138,13 @@
                        'data-id="' + a.id + '" ' +
                        'data-code="' + escapeHtml(a.apartment_code) + '" ' +
                        'data-name="' + escapeHtml(a.apartment_name) + '" ' +
-                       'style="padding:11px 14px;border-radius:10px;cursor:pointer;font-size:12.5px;font-weight:700;color:#302923;border-bottom:1px solid #f7f2ec;background:' + bg + ';transition:background .15s;"' +
+                       'style="padding:11px 14px;border-radius:10px;cursor:pointer;font-size:12.5px;font-weight:700;color:#302923;border-bottom:1px solid #f7f2ec;background:' + bg + ';"' +
                        ' onmouseover="this.style.background=\'#fdfaf4\'"' +
                        ' onmouseout="this.style.background=\'' + bg + '\'">' +
-
                             '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">' +
                                 '<div>' +
                                     '<div>' + escapeHtml(a.apartment_name) + '</div>' +
-                                    '<div style="font-size:10.5px;color:#948c82;font-weight:600;margin-top:2px;">' +
-                                        '#' + escapeHtml(a.apartment_code) +
-                                    '</div>' +
+                                    '<div style="font-size:10.5px;color:#948c82;font-weight:600;margin-top:2px;">#' + escapeHtml(a.apartment_code) + '</div>' +
                                 '</div>' +
                                 (isSel ? '<i class="bi bi-check-circle-fill" style="color:#b51f2c;font-size:14px;"></i>' : '') +
                             '</div>' +
@@ -158,13 +154,8 @@
         aptResults.style.display = "block";
     }
 
-    aptSearch && aptSearch.addEventListener("focus", function () {
-        renderAptResults("");
-    });
-
-    aptSearch && aptSearch.addEventListener("input", function () {
-        renderAptResults(aptSearch.value);
-    });
+    aptSearch && aptSearch.addEventListener("focus", function () { renderAptResults(""); });
+    aptSearch && aptSearch.addEventListener("input", function () { renderAptResults(aptSearch.value); });
 
     aptResults && aptResults.addEventListener("click", function (e) {
         var item = e.target.closest(".pf-apt-item");
@@ -199,7 +190,6 @@
 
     (function initialDivisionSync() {
         if (!aptIdInput || !aptIdInput.value) return;
-
         var apt = null;
         for (var i = 0; i < apartments.length; i++) {
             if (String(apartments[i].id) === String(aptIdInput.value)) {
@@ -207,13 +197,11 @@
                 break;
             }
         }
-
         if (apt) {
             var savedDivision = (window.CUSTOMER_DIVISION || "");
             loadDivisionsForApartment(apt, savedDivision);
         }
     })();
-
 
     /* =========================================================
        PASSWORD SHOW / HIDE
@@ -237,7 +225,6 @@
         });
     });
 
-
     /* =========================================================
        RESET
        ========================================================= */
@@ -246,12 +233,8 @@
         location.reload();
     });
 
-
     /* =========================================================
        SAVE PROFILE
-       - Individual House customer → only full_name is editable,
-         backend ignores apartment/division
-       - Apartment customer → full_name + apartment + division
        ========================================================= */
     var profileForm = document.getElementById("profileForm");
     profileForm && profileForm.addEventListener("submit", function (e) {
@@ -263,8 +246,6 @@
         var fd = new FormData();
         fd.append("full_name", name);
 
-        /* Only send apartment/division if this is an apartment customer
-           AND the fields actually exist in the DOM */
         if (ADDRESS_TYPE === "apartment" && aptIdInput && divSelect) {
             var aptId = aptIdInput.value;
             var div   = divSelect.value;
@@ -305,7 +286,6 @@
             showToast("Unable to connect.", true);
         });
     });
-
 
     /* =========================================================
        SET NEW PASSWORD
@@ -357,6 +337,196 @@
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-shield-check"></i> Update Password';
             showToast("Unable to connect.", true);
+        });
+    });
+
+    /* =========================================================
+       ORDER DETAILS MODAL
+       ========================================================= */
+    var modal       = document.getElementById("pfOrderModal");
+    var modalClose  = document.getElementById("pfModalClose");
+    var modalCode   = document.getElementById("pfModalOrderCode");
+    var modalDate   = document.getElementById("pfModalOrderDate");
+    var modalBody   = document.getElementById("pfModalBody");
+
+    function moneyFmt(n) {
+        return "₹" + Math.round(Number(n) || 0);
+    }
+
+    function escHtml(s) {
+        return String(s == null ? "" : s)
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function fmtDateTime(s) {
+        if (!s) return "—";
+        try {
+            var dt = new Date(s.replace(" ", "T"));
+            if (isNaN(dt.getTime())) return s;
+            return dt.toLocaleString("en-IN", {
+                day: "2-digit", month: "short", year: "numeric",
+                hour: "2-digit", minute: "2-digit"
+            });
+        } catch (e) { return s; }
+    }
+
+    function openOrderModal(order) {
+        if (!order || !modal) return;
+
+        modalCode.textContent = "#" + (order.order_code || "");
+        modalDate.textContent = fmtDateTime(order.created_at);
+
+        var statusClass = String(order.status || "").toLowerCase();
+        var payClass    = String(order.payment_status || "").toLowerCase();
+
+        /* Products */
+        var productsHtml = "";
+        if (Array.isArray(order.products) && order.products.length) {
+            productsHtml = order.products.map(function (p) {
+                var thumb = p.image
+                    ? '<img src="' + escHtml(p.image) + '" alt="" onerror="this.style.display=\'none\';this.parentElement.innerHTML=\'📦\';">'
+                    : '📦';
+                var meta = [];
+                if (p.variant_name) meta.push(escHtml(p.variant_name));
+                if (p.variant_qty)  meta.push(escHtml(p.variant_qty));
+                meta.push("Qty " + (p.qty || 1));
+                return '<div class="pf-modal-prod">' +
+                       '<div class="pf-modal-thumb">' + thumb + '</div>' +
+                       '<div class="pf-modal-prod-info">' +
+                           '<p class="pf-modal-prod-name">' + escHtml(p.name || "") + '</p>' +
+                           '<p class="pf-modal-prod-meta">' + meta.join(" · ") + '</p>' +
+                       '</div>' +
+                       '<div class="pf-modal-prod-total">' + moneyFmt(p.line_total || (p.price * p.qty)) + '</div>' +
+                       '</div>';
+            }).join("");
+        } else {
+            productsHtml = '<div style="padding:14px;text-align:center;color:#948c82;font-size:12px;">No items</div>';
+        }
+
+        /* Address */
+        var addr = order.address || {};
+        var addressHtml = "";
+        if (order.delivery_mode === "pickup") {
+            addressHtml = '<div class="pf-modal-row">' +
+                          '<span class="lbl">Branch</span>' +
+                          '<span class="val">' + escHtml(order.pickup_branch_name || "—") + '</span>' +
+                          '</div>';
+        } else if (order.address_type === "individual_house") {
+            addressHtml = '<div class="pf-modal-row">' +
+                          '<span class="lbl">Type</span>' +
+                          '<span class="val"><span class="pf-badge individual"><i class="bi bi-house-door"></i> Individual House</span></span>' +
+                          '</div>' +
+                          '<div class="pf-modal-row">' +
+                          '<span class="lbl">Address</span>' +
+                          '<span class="val">' + escHtml(addr.full_address || "—") + '</span>' +
+                          '</div>';
+        } else {
+            addressHtml = '<div class="pf-modal-row">' +
+                          '<span class="lbl">Apartment</span>' +
+                          '<span class="val">' + escHtml(addr.apartment_name || "—") +
+                          (addr.apartment_code ? ' #' + escHtml(addr.apartment_code) : '') + '</span>' +
+                          '</div>' +
+                          '<div class="pf-modal-row">' +
+                          '<span class="lbl">Division</span>' +
+                          '<span class="val">' + escHtml(addr.division_label || "—") + '</span>' +
+                          '</div>';
+        }
+
+        /* Delivery boy */
+        var dboyHtml = "";
+        if (order.delivery_mode === "pickup") {
+            dboyHtml = '<span class="pf-dboy-pickup"><i class="bi bi-shop"></i> Store Pickup</span>';
+        } else if (order.delivery_boy_name) {
+            dboyHtml = '<div class="pf-dboy">' +
+                       '<div class="pf-dboy-avatar">' + escHtml(String(order.delivery_boy_name).charAt(0).toUpperCase()) + '</div>' +
+                       '<div class="pf-dboy-info">' +
+                           '<div class="pf-dboy-name">' + escHtml(order.delivery_boy_name) + '</div>' +
+                           (order.delivery_boy_code ? '<div class="pf-dboy-code">#' + escHtml(order.delivery_boy_code) + '</div>' : '') +
+                       '</div>' +
+                       '</div>';
+        } else {
+            dboyHtml = '<span class="pf-dboy-empty"><i class="bi bi-dash-circle"></i> Not assigned</span>';
+        }
+
+        /* Totals */
+        var totalsHtml = '';
+        totalsHtml += '<div class="pf-modal-trow"><span>Subtotal</span><strong>' + moneyFmt(order.subtotal) + '</strong></div>';
+        if (Number(order.division_charge) > 0) {
+            totalsHtml += '<div class="pf-modal-trow"><span>Delivery charge</span><strong>' + moneyFmt(order.division_charge) + '</strong></div>';
+        }
+        if (Number(order.tax_amount) > 0) {
+            totalsHtml += '<div class="pf-modal-trow"><span>Tax (' + Number(order.tax_rate) + '%)</span><strong>' + moneyFmt(order.tax_amount) + '</strong></div>';
+        }
+        totalsHtml += '<div class="pf-modal-trow grand"><span>Total</span><strong>' + moneyFmt(order.total_amount) + '</strong></div>';
+
+        /* Order note */
+        var noteHtml = "";
+        if (order.order_note && String(order.order_note).trim() !== "") {
+            noteHtml = '<div class="pf-modal-section">' +
+                       '<h4 class="pf-modal-title"><i class="bi bi-chat-left-text"></i> Instructions</h4>' +
+                       '<div class="pf-modal-note">' + escHtml(order.order_note) + '</div>' +
+                       '</div>';
+        }
+
+        modalBody.innerHTML =
+            '<div class="pf-modal-section">' +
+                '<h4 class="pf-modal-title"><i class="bi bi-info-circle"></i> Status</h4>' +
+                '<div class="pf-modal-info">' +
+                    '<div class="pf-modal-row">' +
+                        '<span class="lbl">Order Status</span>' +
+                        '<span class="val"><span class="pf-badge ' + statusClass + '">' + escHtml(String(order.status || "").toUpperCase()) + '</span></span>' +
+                    '</div>' +
+                    '<div class="pf-modal-row">' +
+                        '<span class="lbl">Payment</span>' +
+                        '<span class="val"><span class="pf-badge ' + (payClass === "paid" ? "received" : "pending") + '">' + escHtml(String(order.payment_status || "").toUpperCase()) + '</span></span>' +
+                    '</div>' +
+                    '<div class="pf-modal-row">' +
+                        '<span class="lbl">Delivered By</span>' +
+                        '<span class="val">' + dboyHtml + '</span>' +
+                    '</div>' +
+                '</div>' +
+            '</div>' +
+
+            '<div class="pf-modal-section">' +
+                '<h4 class="pf-modal-title"><i class="bi bi-geo-alt"></i> Delivery Address</h4>' +
+                '<div class="pf-modal-info">' + addressHtml + '</div>' +
+            '</div>' +
+
+            '<div class="pf-modal-section">' +
+                '<h4 class="pf-modal-title"><i class="bi bi-basket3"></i> Items</h4>' +
+                '<div class="pf-modal-products">' + productsHtml + '</div>' +
+            '</div>' +
+
+            '<div class="pf-modal-section">' +
+                '<h4 class="pf-modal-title"><i class="bi bi-receipt"></i> Payment Summary</h4>' +
+                '<div class="pf-modal-totals">' + totalsHtml + '</div>' +
+            '</div>' +
+
+            noteHtml;
+
+        modal.classList.add("show");
+        document.body.style.overflow = "hidden";
+    }
+
+    function closeOrderModal() {
+        modal.classList.remove("show");
+        document.body.style.overflow = "";
+    }
+
+    modalClose && modalClose.addEventListener("click", closeOrderModal);
+    modal && modal.addEventListener("click", function (e) {
+        if (e.target === modal) closeOrderModal();
+    });
+    document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && modal && modal.classList.contains("show")) closeOrderModal();
+    });
+
+    document.querySelectorAll(".js-order-row").forEach(function (row) {
+        row.addEventListener("click", function () {
+            var idx = Number(this.dataset.orderIndex);
+            var order = ORDERS[idx];
+            if (order) openOrderModal(order);
         });
     });
 
