@@ -2,17 +2,6 @@
 /* =========================================================
    MRS MILL@ — PLACE ORDER
    File: ./ajax/checkout-place-order.php
-
-   Orders schema (current):
-     customer_id         varchar(20)   MRSMCxxxxx
-     address_type        enum('apartment','individual_house','pickup')
-     address_json        longtext      JSON blob
-     order_note          varchar(500)  optional instruction
-
-   order_containers.customer_id  → int(11)  (customers.id)
-
-   Wallet covers food + tax + delivery.
-   Container deposit tracked but NOT added to total_amount.
    ========================================================= */
 
 require_once __DIR__ . '/../config/config.php';
@@ -24,13 +13,14 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     jsonResponse(false, 'Method not allowed.');
 }
 
-/* ---------- PRE-DECLARE every variable that will be used in jsonResponse ---------- */
+/* ---------- PRE-DECLARE ---------- */
 $orderId         = 0;
 $orderCode       = '';
 $customerCode    = '';
 $addressType     = 'apartment';
 $deliveryMode    = 'delivery';
 $subtotal        = 0.0;
+$discountAmount  = 0.0;
 $taxAmount       = 0.0;
 $taxRate         = 0.0;
 $taxType         = 'exclusive';
@@ -40,6 +30,8 @@ $totalContainers = 0;
 $containerAmount = 0.0;
 $deliveryBoyId   = null;
 $orderNote       = '';
+$appliedCoupon   = '';
+$couponDiscount  = 0.0;
 
 /* ---------- INPUT ---------- */
 $payment_id       = trim($_POST['razorpay_payment_id'] ?? '');
@@ -62,6 +54,9 @@ $walletRequested  = (float)($_POST['wallet_applied'] ?? 0);
 /* ---------- ORDER NOTE ---------- */
 $orderNote = trim($_POST['order_note'] ?? '');
 if (mb_strlen($orderNote) > 500) $orderNote = mb_substr($orderNote, 0, 500);
+
+/* ---------- SESSION COUPON ---------- */
+$appliedCoupon = strtoupper(trim($_SESSION['applied_coupon'] ?? ''));
 
 if ($name === '' || !preg_match('/^[0-9]{10,15}$/', $mobile)) {
     jsonResponse(false, 'Invalid customer details.');
@@ -105,7 +100,7 @@ if (empty($cartItems)) {
     jsonResponse(false, 'Cart is empty.');
 }
 
-/* ---------- BUILD ADDRESS JSON + resolved details ---------- */
+/* ---------- BUILD ADDRESS JSON ---------- */
 $addressJson           = [];
 $apartmentName         = '';
 $resolvedCode          = '';
@@ -125,7 +120,8 @@ if ($deliveryMode === 'delivery') {
             if (is_array($addr) && !empty($addr['house_image'])) {
                 $houseImage = $addr['house_image'];
             }
-        } catch (PDOException $e) {}
+        } catch (PDOException $e) {
+        }
 
         $addressJson = [
             'full_address' => $fullAddress,
@@ -134,14 +130,12 @@ if ($deliveryMode === 'delivery') {
         ];
 
         $resolvedCode = 'IH_' . substr(md5(trim($fullAddress)), 0, 12);
-
-        $apartmentId           = 0;
-        $apartmentCode         = '';
-        $apartmentName         = '';
-        $division              = '';
-        $divisionCharge        = 0;
+        $apartmentId = 0;
+        $apartmentCode = '';
+        $apartmentName = '';
+        $division = '';
+        $divisionCharge = 0;
         $divisionChargeForCalc = 0;
-
     } else {
 
         if ($apartmentId <= 0 || $division === '') {
@@ -158,7 +152,9 @@ if ($deliveryMode === 'delivery') {
         $apartmentCode = $apt['apartment_code'];
         $apartmentName = $apt['apartment_name'];
 
-        $block = ''; $door = ''; $floor = '';
+        $block = '';
+        $door = '';
+        $floor = '';
         foreach (array_map('trim', explode('/', $division)) as $p) {
             if (stripos($p, 'Blk ')    === 0) $block = trim(substr($p, 4));
             elseif (stripos($p, 'Door ') === 0) $door  = trim(substr($p, 5));
@@ -179,7 +175,6 @@ if ($deliveryMode === 'delivery') {
         $resolvedCode          = $apartmentCode;
         $divisionChargeForCalc = $divisionCharge;
     }
-
 } else {
     if ($pickupBranchId <= 0) jsonResponse(false, 'Please select a pickup branch.');
 
@@ -195,14 +190,14 @@ if ($deliveryMode === 'delivery') {
         'branch_name' => $pickupBranchName,
     ];
 
-    $addressType           = 'pickup';
-    $apartmentId           = 0;
-    $apartmentCode         = '';
-    $apartmentName         = '';
-    $division              = '';
-    $divisionCharge        = 0;
+    $addressType = 'pickup';
+    $apartmentId = 0;
+    $apartmentCode = '';
+    $apartmentName = '';
+    $division = '';
+    $divisionCharge = 0;
     $divisionChargeForCalc = 0;
-    $resolvedCode          = '';
+    $resolvedCode = '';
 }
 
 $addressJsonFinal = json_encode($addressJson, JSON_UNESCAPED_UNICODE);
@@ -215,16 +210,16 @@ if ($deliveryMode === 'delivery' && $resolvedCode !== '') {
              FROM apartment_delivery_boys adb
              INNER JOIN delivery_boys db ON db.id = adb.delivery_boy_id
              WHERE adb.apartment_code = ? AND db.status = 1
-             ORDER BY adb.id ASC
-             LIMIT 1"
+             ORDER BY adb.id ASC LIMIT 1"
         );
         $dBoyStmt->execute([$resolvedCode]);
         $row = $dBoyStmt->fetch(PDO::FETCH_ASSOC);
         if ($row) $deliveryBoyId = (int)$row['delivery_boy_id'];
-    } catch (PDOException $e) {}
+    } catch (PDOException $e) {
+    }
 }
 
-/* ---------- BUILD ITEMS + CONTAINERS ---------- */
+/* ---------- BUILD ITEMS ---------- */
 $items           = [];
 $subtotal        = 0.0;
 $totalContainers = 0;
@@ -274,6 +269,160 @@ foreach ($cartItems as $c) {
     ];
 }
 
+/* =========================================================
+   RECALCULATE DISCOUNTS SERVER-SIDE (trust but verify)
+   ========================================================= */
+$totalDiscountAmount = 0;
+
+/* A) TIME-BASED DISCOUNT (per menu) */
+$cartGroupedByMenu = [];
+foreach ($items as $c) {
+    $mc = $c['menu_code'] ?: 'GENERAL';
+    if (!isset($cartGroupedByMenu[$mc])) {
+        $cartGroupedByMenu[$mc] = ['subtotal' => 0];
+    }
+    $cartGroupedByMenu[$mc]['subtotal'] += ($c['price'] * $c['qty']);
+}
+
+foreach ($cartGroupedByMenu as $menuCode => $group) {
+    if ($menuCode === 'GENERAL') continue;
+    $menuSubtotal = $group['subtotal'];
+
+    try {
+        $mStmt = $pdo->prepare("SELECT * FROM menus WHERE menu_code = ? LIMIT 1");
+        $mStmt->execute([$menuCode]);
+        $menuInfo = $mStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$menuInfo) continue;
+
+        $menuStart = strtotime($menuInfo['start_at']);
+        $menuEnd   = strtotime($menuInfo['end_at']);
+        $now       = time();
+        if ($now < $menuStart || $now > $menuEnd) continue;
+
+        $dStmt = $pdo->prepare(
+            "SELECT dt.amount_type, dt.discount_amount, dt.start_time, dt.end_time
+             FROM discounts d
+             INNER JOIN discount_times dt ON dt.discount_code = d.discount_code
+             WHERE d.status = 1 AND d.discount_type = 'time'
+             ORDER BY dt.id ASC"
+        );
+        $dStmt->execute();
+        $slots = $dStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $prevEndEpoch = $menuStart;
+        $baseDay      = date('Y-m-d', $menuStart);
+        $cur = null;
+
+        foreach ($slots as $s) {
+            $slotEndTs = strtotime($baseDay . ' ' . $s['end_time']);
+            if ($slotEndTs < $prevEndEpoch) $slotEndTs += 86400;
+
+            if ($now >= $prevEndEpoch && $now <= $slotEndTs) {
+                $cur = $s;
+                break;
+            }
+            $prevEndEpoch = $slotEndTs;
+        }
+
+        if ($cur && (float)$cur['discount_amount'] > 0) {
+            if ($cur['amount_type'] === 'percent') {
+                $totalDiscountAmount += round(($menuSubtotal * (float)$cur['discount_amount']) / 100);
+            } else {
+                $totalDiscountAmount += min((float)$cur['discount_amount'], $menuSubtotal);
+            }
+        }
+    } catch (PDOException $e) {
+    }
+}
+
+/* B) CUSTOMER LOYALTY DISCOUNT */
+try {
+    $lStmt = $pdo->prepare(
+        "SELECT COUNT(id) FROM orders
+         WHERE customer_id = ? AND status != 'cancelled'"
+    );
+    $lStmt->execute([$customerCode]);
+    $orderCount = (int)$lStmt->fetchColumn();
+
+    $tStmt = $pdo->prepare(
+        "SELECT t.amount_type, t.discount_amount
+         FROM discounts d
+         INNER JOIN discount_customer_tiers t ON t.discount_code = d.discount_code
+         WHERE d.status = 1
+           AND d.discount_type = 'customer_type'
+           AND ? BETWEEN t.min_orders AND t.max_orders
+         LIMIT 1"
+    );
+    $tStmt->execute([$orderCount]);
+    $tierRow = $tStmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($tierRow && (float)$tierRow['discount_amount'] > 0) {
+        if ($tierRow['amount_type'] === 'percent') {
+            $totalDiscountAmount += round(($subtotal * (float)$tierRow['discount_amount']) / 100);
+        } else {
+            $totalDiscountAmount += min((float)$tierRow['discount_amount'], $subtotal);
+        }
+    }
+} catch (PDOException $e) {
+}
+
+/* C) COUPON DISCOUNT (with limit re-check) */
+if ($appliedCoupon !== '') {
+    try {
+        $cStmt = $pdo->prepare(
+            "SELECT d.id, d.discount_code, d.usage_limit, d.used_count,
+                    d.valid_from_date, d.valid_to_date,
+                    dt.start_time, dt.end_time, dt.amount_type, dt.discount_amount
+             FROM discounts d
+             INNER JOIN discount_times dt ON dt.discount_code = d.discount_code
+             WHERE d.status = 1 AND d.discount_type = 'coupon' AND d.coupon_code = ?
+             LIMIT 1"
+        );
+        $cStmt->execute([$appliedCoupon]);
+        $cRow = $cStmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($cRow) {
+            // Re-check limit
+            if ((int)$cRow['usage_limit'] > 0 && (int)$cRow['used_count'] >= (int)$cRow['usage_limit']) {
+                jsonResponse(false, 'This coupon has reached its usage limit.');
+            }
+
+            // Date check
+            $nowD = date('Y-m-d');
+            if (!empty($cRow['valid_from_date']) && $nowD < $cRow['valid_from_date']) {
+                jsonResponse(false, 'Coupon is not yet active.');
+            }
+            if (!empty($cRow['valid_to_date']) && $nowD > $cRow['valid_to_date']) {
+                jsonResponse(false, 'Coupon has expired.');
+            }
+
+            // Time window
+            $nowT = date('H:i:s');
+            if ($nowT < $cRow['start_time'] || $nowT > $cRow['end_time']) {
+                jsonResponse(false, 'Coupon cannot be used at this time.');
+            }
+
+            $amt = (float)$cRow['discount_amount'];
+            if ($cRow['amount_type'] === 'percent') {
+                $couponDiscount = round(($subtotal * $amt) / 100);
+            } else {
+                $couponDiscount = min($amt, $subtotal);
+            }
+            $totalDiscountAmount += $couponDiscount;
+        } else {
+            // Coupon no longer exists / disabled → ignore silently
+            $appliedCoupon = '';
+            unset($_SESSION['applied_coupon']);
+        }
+    } catch (PDOException $e) {
+    }
+}
+
+/* Cap total discount at subtotal */
+if ($totalDiscountAmount > $subtotal) $totalDiscountAmount = $subtotal;
+$discountAmount = round($totalDiscountAmount);
+$discountedSubtotal = max(0, $subtotal - $discountAmount);
+
 /* ---------- TAX ---------- */
 $settings  = getSettings($pdo);
 $taxStatus = (int)($settings['tax_status'] ?? 0);
@@ -287,16 +436,16 @@ $foodPlusDelivery = 0.0;
 
 if ($taxStatus === 1 && $taxRate > 0) {
     if ($taxType === 'inclusive') {
-        $taxAmount        = round($subtotal - ($subtotal / (1 + ($taxRate / 100))));
-        $foodPlusDelivery = $subtotal + $deliveryPortion;
+        $taxAmount        = round($discountedSubtotal - ($discountedSubtotal / (1 + ($taxRate / 100))));
+        $foodPlusDelivery = $discountedSubtotal + $deliveryPortion;
     } else {
-        $taxAmount        = round($subtotal * ($taxRate / 100));
-        $foodPlusDelivery = $subtotal + $deliveryPortion + $taxAmount;
+        $taxAmount        = round($discountedSubtotal * ($taxRate / 100));
+        $foodPlusDelivery = $discountedSubtotal + $deliveryPortion + $taxAmount;
     }
 } else {
     $taxRate          = 0.0;
     $taxAmount        = 0.0;
-    $foodPlusDelivery = $subtotal + $deliveryPortion;
+    $foodPlusDelivery = $discountedSubtotal + $deliveryPortion;
 }
 
 $foodPlusDelivery = round($foodPlusDelivery);
@@ -337,7 +486,8 @@ try {
          ORDER BY start_at DESC LIMIT 1"
     );
     $activeMenuCode = $mStmt->fetchColumn() ?: null;
-} catch (PDOException $e) {}
+} catch (PDOException $e) {
+}
 
 $stockStmt = $pdo->prepare(
     "UPDATE menu_products
@@ -350,7 +500,6 @@ try {
     $tblCheck = $pdo->query("SHOW TABLES LIKE 'order_items'");
     $hasOrderItems = (bool)$tblCheck->fetchColumn();
 } catch (PDOException $e) {
-    $hasOrderItems = false;
 }
 
 $paymentStatus = !empty($payment_id) ? 'paid' : 'unpaid';
@@ -390,10 +539,11 @@ try {
                 $customerRowId,
                 $name,
             ]);
-        } catch (PDOException $e) {}
+        } catch (PDOException $e) {
+        }
     }
 
-    /* Insert order — includes order_note */
+    /* Insert order */
     $ins = $pdo->prepare(
         "INSERT INTO orders
             (order_code, customer_id, delivery_boy_id,
@@ -452,7 +602,6 @@ try {
         );
     }
 
-    /* Loop items: reduce stock + optional order_items */
     foreach ($items as $it) {
         if ($it['variant_id'] > 0 && $it['qty'] > 0) {
             $menuForLine = $it['menu_code'] ?: $activeMenuCode;
@@ -476,7 +625,8 @@ try {
                     $it['qty'],
                     $it['line_total'],
                 ]);
-            } catch (PDOException $e) {}
+            } catch (PDOException $e) {
+            }
         }
     }
 
@@ -495,7 +645,51 @@ try {
                 $totalContainers,
                 $containerAmount,
             ]);
-        } catch (PDOException $e) {}
+        } catch (PDOException $e) {
+        }
+    }
+
+    /* ✅ TRACK COUPON USAGE (atomic) */
+    if ($appliedCoupon !== '' && $couponDiscount > 0) {
+        try {
+            $cStmt = $pdo->prepare(
+                "SELECT id, discount_code, usage_limit, used_count
+                 FROM discounts WHERE coupon_code = ? LIMIT 1 FOR UPDATE"
+            );
+            $cStmt->execute([$appliedCoupon]);
+            $cRow = $cStmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($cRow) {
+                // Re-check limit inside the transaction
+                if ((int)$cRow['usage_limit'] > 0 && (int)$cRow['used_count'] >= (int)$cRow['usage_limit']) {
+                    // Rollback because limit was consumed between validation and now
+                    $pdo->rollBack();
+                    jsonResponse(false, 'This coupon has just reached its usage limit. Please remove it and try again.');
+                }
+
+                // Log usage
+                $logStmt = $pdo->prepare(
+                    "INSERT INTO coupon_usage
+                        (discount_code, coupon_code, customer_id, customer_name,
+                         customer_mobile, order_id, order_code, used_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, NOW())"
+                );
+                $logStmt->execute([
+                    $cRow['discount_code'],
+                    $appliedCoupon,
+                    $customerRowId,
+                    $name,
+                    $mobile,
+                    $orderId,
+                    $orderCode
+                ]);
+
+                // Increment counter
+                $pdo->prepare("UPDATE discounts SET used_count = used_count + 1 WHERE id = ?")
+                    ->execute([$cRow['id']]);
+            }
+        } catch (PDOException $e) {
+        }
     }
 
     /* Clear cart */
@@ -503,8 +697,10 @@ try {
         ->execute([$customerRowId]);
     $_SESSION['cart'] = [];
 
-    $pdo->commit();
+    /* Clear applied coupon */
+    unset($_SESSION['applied_coupon']);
 
+    $pdo->commit();
 } catch (PDOException $e) {
     if ($pdo->inTransaction()) $pdo->rollBack();
     jsonResponse(false, 'Server error: ' . $e->getMessage());
@@ -519,6 +715,9 @@ jsonResponse(true, 'Order placed.', [
     'customer_code'    => $customerCode,
     'address_type'     => $addressType,
     'subtotal'         => $subtotal,
+    'discount'         => $discountAmount,
+    'coupon_code'      => $appliedCoupon,
+    'coupon_discount'  => $couponDiscount,
     'tax_amount'       => $taxAmount,
     'tax_rate'         => $taxRate,
     'tax_type'         => $taxType,
