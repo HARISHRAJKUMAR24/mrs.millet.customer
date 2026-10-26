@@ -47,6 +47,29 @@
                     </div>
                 </div>
 
+                <!-- PASSWORD FIELD -->
+                <div class="cust-field" id="regPasswordField">
+                    <label>Create Password</label>
+                    <div class="cust-input-wrap">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="11" width="18" height="11" rx="2" />
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                        </svg>
+                        <input type="password" class="cust-input" id="regPassword"
+                            placeholder="Min 3 characters" maxlength="100" autocomplete="new-password">
+                        <button type="button" class="pw-toggle" data-target="regPassword" aria-label="Show password">
+                            <svg class="eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                <circle cx="12" cy="12" r="3" />
+                            </svg>
+                            <svg class="eye-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
+                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                                <line x1="1" y1="1" x2="23" y2="23" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
                 <!-- ADDRESS TYPE TOGGLE -->
                 <div class="cust-field">
                     <label>Address Type</label>
@@ -63,7 +86,6 @@
                 <!-- ================= APARTMENT MODE ================= -->
                 <div id="regApartmentBlock">
 
-                    <!-- Apartment (searchable OR free-typed) -->
                     <div class="cust-field" style="position:relative;">
                         <label>Apartment / Community</label>
                         <div class="cust-input-wrap">
@@ -80,7 +102,6 @@
                         <p class="mm-co-hint" id="regApartmentHint"></p>
                     </div>
 
-                    <!-- Block / Floor / Door No — 3 searchable inputs -->
                     <div class="cust-field" style="position:relative;">
                         <label>Block <span style="color:#b51f2c;">*</span></label>
                         <div class="cust-input-wrap">
@@ -125,29 +146,6 @@
                         <p class="mm-co-hint" id="regVariantHint"></p>
                     </div>
 
-                    <!-- Password -->
-                    <div class="cust-field" id="regPasswordField" style="display:none;">
-                        <label>Create Password</label>
-                        <div class="cust-input-wrap">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <rect x="3" y="11" width="18" height="11" rx="2" />
-                                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                            </svg>
-                            <input type="password" class="cust-input" id="regPassword"
-                                placeholder="Min 3 characters" maxlength="100" autocomplete="new-password">
-                            <button type="button" class="pw-toggle" data-target="regPassword" aria-label="Show password">
-                                <svg class="eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                                    <circle cx="12" cy="12" r="3" />
-                                </svg>
-                                <svg class="eye-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
-                                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                                    <line x1="1" y1="1" x2="23" y2="23" />
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-
                 </div><!-- /#regApartmentBlock -->
 
                 <!-- ================= INDIVIDUAL HOUSE MODE ================= -->
@@ -161,8 +159,7 @@
                                 <path d="M9 21V12h6v9" />
                             </svg>
                             <input type="text" class="cust-input" id="regHouseAddress"
-                                placeholder="Door No, Street, Area, City"
-                                maxlength="250">
+                                placeholder="Door No, Street, Area, City" maxlength="250">
                         </div>
                     </div>
 
