@@ -1,8 +1,7 @@
 /* =========================================================
    MRS MILL@ — CHECKOUT
-   File: ./js/checkout.js
-   Address branch is decided by window.CUSTOMER_ADDRESS_TYPE.
-   Wallet covers food + tax + delivery.
+   File: ./js/checkout.js   v2026-11-03j
+   Fix: individual house delivery charge now correctly applied.
    ========================================================= */
 
 (function () {
@@ -23,7 +22,6 @@
     const pickupBranchSelect = document.getElementById("coPickupBranch");
     const pickupBranchHint = document.getElementById("pickupBranchHint");
 
-    /* Optional elements (may be hidden inputs if logged-in read-only) */
     const aptSearch = document.getElementById("coApartmentSearch");
     const aptResults = document.getElementById("apartmentResults");
     const aptIdInput = document.getElementById("coApartmentId");
@@ -79,7 +77,6 @@
         }
         : { status: 0, rate: 0, type: "exclusive" };
 
-    /* ---------- Helpers ---------- */
     function money(n) { return "₹" + Math.round(Number(n) || 0); }
 
     function escapeHtml(s) {
@@ -175,24 +172,34 @@
 
     modeRadios.forEach(r => r.addEventListener("change", function () { setMode(this.value); }));
 
-    /* ---------- RESTORE READ-ONLY ADDRESS ---------- */
+    /* =========================================================
+       ✅ RESTORE ADDRESS — FIXED for individual house
+       ========================================================= */
     function restoreCustomerAddress() {
+        const savedChg = Number(window.CUSTOMER_DIVISION_CHARGE || 0);
+
+        /* Individual house — use saved delivery_charge directly */
         if (ADDRESS_TYPE === "individual_house") {
-            deliveryCharge = 0;
+            deliveryCharge = Math.round(savedChg);
             updateTotals();
             return;
         }
 
+        /* Apartment */
         const aptId = Number(window.CUSTOMER_APARTMENT_ID || 0);
         const savedDiv = String(window.CUSTOMER_DIVISION || "");
-        const savedChg = Number(window.CUSTOMER_DIVISION_CHARGE || 0);
 
         if (aptId > 0) {
-            if (selectedDivision) { updateTotals(); return; }
+            if (selectedDivision) {
+                deliveryCharge = Math.round(savedChg);
+                updateTotals();
+                return;
+            }
 
             if (savedDiv !== "") {
                 if (divisionInput) divisionInput.value = savedDiv;
                 if (divisionSearch) divisionSearch.value = "Division " + savedDiv;
+                if (divisionChargeInput) divisionChargeInput.value = savedChg;
                 selectedDivision = savedDiv;
                 deliveryCharge = Math.round(savedChg);
                 if (divisionHint) divisionHint.textContent = "Delivery charge: ₹" + deliveryCharge;
@@ -218,7 +225,6 @@
             .then(r => r.json().catch(() => null))
             .then(res => {
                 if (!res || !res.success || !res.data || !res.data.found) return;
-
                 if (res.data.name && nameInput && !nameInput.value.trim()) {
                     nameInput.value = res.data.name;
                 }
@@ -245,7 +251,7 @@
         });
     }
 
-    /* ---------- APARTMENT MANUAL PICKER (guests) ---------- */
+    /* ---------- APARTMENT PICKER ---------- */
     function loadApartments(cb) {
         if (apartmentsLoaded) { if (typeof cb === "function") cb(); return; }
         apartmentsLoaded = true;
@@ -306,7 +312,7 @@
         }
     });
 
-    /* ---------- DIVISION PICKER (guests only) ---------- */
+    /* ---------- DIVISION PICKER ---------- */
     function loadDivisions(apartmentId, preselect) {
         if (!apartmentId || getCheckedMode() === "pickup") return;
         if (!divisionField) return;
@@ -435,17 +441,102 @@
     }
     updateTotals();
     (function autoFillAddress() {
-        if (Number(window.CUSTOMER_APARTMENT_ID || 0) > 0) restoreCustomerAddress();
+        if (Number(window.CUSTOMER_APARTMENT_ID || 0) > 0 || ADDRESS_TYPE === "individual_house") {
+            restoreCustomerAddress();
+        }
     })();
 
     /* =========================================================
-       PAY NOW
+       INLINE OFFER RADIO — Apply selection
+       ========================================================= */
+    (function () {
+        const offersList     = document.getElementById('offersList');
+        const applyBtn       = document.getElementById('offerApplyBtn');
+        const offerMsg       = document.getElementById('offerMsg');
+        const manualInput    = document.getElementById('offerManualInput');
+        const manualApplyBtn = document.getElementById('offerManualApply');
+
+        if (!offersList || !applyBtn) return;
+
+        function showMsg(msg, type) {
+            if (!offerMsg) return;
+            offerMsg.textContent = msg;
+            offerMsg.className = 'mm-offer-msg ' + (type || '');
+        }
+
+        offersList.querySelectorAll('.mm-offer-row').forEach(row => {
+            row.addEventListener('click', () => {
+                offersList.querySelectorAll('.mm-offer-row').forEach(r => r.classList.remove('selected'));
+                row.classList.add('selected');
+                const radio = row.querySelector('input[type="radio"]');
+                if (radio) radio.checked = true;
+            });
+        });
+
+        function currentSelection() {
+            const checked = offersList.querySelector('input[name="mm_offer_pick"]:checked');
+            return checked ? checked.value : '';
+        }
+
+        function doApply(code) {
+            applyBtn.disabled = true;
+            showMsg('Applying...', '');
+
+            const body = (code === '') ? 'remove=1' : ('code=' + encodeURIComponent(code));
+
+            fetch(MAIN_URL + 'ajax/apply-coupon.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                credentials: 'same-origin',
+                body: body,
+            })
+            .then(r => r.json())
+            .then(res => {
+                applyBtn.disabled = false;
+                if (res.success) {
+                    showMsg(res.message || 'Done!', 'success');
+                    setTimeout(() => window.location.reload(), 500);
+                } else {
+                    showMsg(res.message || 'Failed.', 'error');
+                }
+            })
+            .catch(() => {
+                applyBtn.disabled = false;
+                showMsg('Network error.', 'error');
+            });
+        }
+
+        applyBtn.addEventListener('click', function () {
+            doApply(currentSelection());
+        });
+
+        if (manualApplyBtn) {
+            manualApplyBtn.addEventListener('click', function () {
+                const typed = (manualInput.value || '').trim().toUpperCase();
+                if (!typed) {
+                    showMsg('Enter a coupon code.', 'error');
+                    return;
+                }
+                doApply(typed);
+            });
+        }
+
+        if (manualInput) {
+            manualInput.addEventListener('keypress', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    manualApplyBtn.click();
+                }
+            });
+        }
+    })();
+
+    /* =========================================================
+       ✅ PAY NOW — individual house keeps the delivery charge
        ========================================================= */
     payNowBtn?.addEventListener("click", () => {
         const mobile = mobileInput.value.trim();
         const name = nameInput.value.trim();
-
-        // NEW: order note
         const orderNote = (document.getElementById("coOrderNote")?.value || "").trim().slice(0, 500);
 
         if (!/^[0-9]{10,15}$/.test(mobile)) { showToast("Enter a valid mobile number.", "error"); mobileInput.focus(); return; }
@@ -454,7 +545,6 @@
         const mode = getCheckedMode();
         currentMode = mode;
 
-        /* Address payload from DOM */
         let addrType = addressTypeInput ? addressTypeInput.value : "apartment";
         let aptId = aptIdInput ? aptIdInput.value : "";
         let aptCode = aptCodeInput ? aptCodeInput.value : "";
@@ -472,7 +562,8 @@
                 aptId = "";
                 aptCode = "";
                 divLabel = "";
-                divCharge = 0;
+                /* ✅ Keep saved house delivery charge instead of zeroing it */
+                divCharge = Number(window.CUSTOMER_DIVISION_CHARGE || 0);
             } else {
                 if (!aptId) { showToast("Please choose an apartment.", "error"); aptSearch?.focus(); return; }
                 if (!divLabel) { showToast("Please select a division.", "error"); divisionSearch?.focus(); return; }
@@ -498,7 +589,6 @@
             mapLink = "";
         }
 
-        /* Totals */
         const delivery = (mode === "pickup") ? 0 : Math.round(Number(divCharge || 0));
         const tax = calcTax(subtotal);
 
@@ -531,7 +621,6 @@
             order_note: orderNote,
         };
 
-        /* Fully covered by wallet → place directly */
         if (payable <= 0) {
             payNowBtn.disabled = true;
             payNowText.textContent = "Placing...";

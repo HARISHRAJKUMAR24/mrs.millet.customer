@@ -1,8 +1,7 @@
 <?php
 /* =========================================================
-   MRS MILL@ — CUSTOMER LOGIN
+   MRS MILL@ — CUSTOMER LOGIN (with session token)
    File: ./ajax/customer-login.php
-   Source: `customers` only (per current mrs_millet schema).
    ========================================================= */
 
 require_once __DIR__ . '/../config/config.php';
@@ -15,7 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 $mobile   = trim($_POST['mobile_number'] ?? '');
-$password = trim($_POST['password'] ?? '');
+$password = trim($_POST['password']      ?? '');
 
 if (!preg_match('/^[0-9]{10,15}$/', $mobile)) {
     jsonResponse(false, 'Mobile number must be 10–15 digits.');
@@ -55,16 +54,23 @@ try {
         }
     }
 
+    /* Generate a fresh session token */
+    $sessionToken = bin2hex(random_bytes(32));
+
     /* Login success */
     $_SESSION['customer_id']     = (int)$row['id'];
     $_SESSION['customer_code']   = $row['customer_id'];
     $_SESSION['customer_name']   = $row['full_name'];
     $_SESSION['customer_mobile'] = $mobile;
+    $_SESSION['customer_token']  = $sessionToken;
 
-    $pdo->prepare("UPDATE customers SET last_login_at = NOW() WHERE id = ?")
-        ->execute([$row['id']]);
+    $pdo->prepare(
+        "UPDATE customers
+         SET last_login_at = NOW(), session_token = ?
+         WHERE id = ?"
+    )->execute([$sessionToken, $row['id']]);
 
-    /* Decode address for the front-end */
+    /* Decode address */
     $addr = json_decode($row['address_json'] ?? '{}', true);
     if (!is_array($addr)) $addr = [];
 

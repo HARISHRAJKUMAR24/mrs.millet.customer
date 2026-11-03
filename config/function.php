@@ -3,7 +3,57 @@
    MRS MILL@ — CUSTOMER HELPERS
    File: ./config/function.php
    ========================================================= */
+/* =========================================================
+   CUSTOMER TOKEN GUARD
+   Call: require_customer_token($pdo);
+   Returns session data on valid token, sends JSON 401 otherwise.
+   ========================================================= */
+function require_customer_token(PDO $pdo): array
+{
+    $cid   = isset($_SESSION['customer_id']) ? (int)$_SESSION['customer_id'] : 0;
+    $token = $_SESSION['customer_token'] ?? '';
 
+    if ($cid <= 0 || $token === '') {
+        if (!headers_sent()) header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['success' => false, 'message' => 'Please log in.']);
+        exit;
+    }
+
+    try {
+        $stmt = $pdo->prepare(
+            "SELECT id, customer_id, full_name, mobile_number, session_token, status
+             FROM customers WHERE id = ? LIMIT 1"
+        );
+        $stmt->execute([$cid]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row || (int)$row['status'] !== 1) {
+            _customer_logout_session();
+            echo json_encode(['success' => false, 'message' => 'Session expired. Please log in.']);
+            exit;
+        }
+        if (!hash_equals((string)$row['session_token'], (string)$token)) {
+            _customer_logout_session();
+            echo json_encode(['success' => false, 'message' => 'Session expired. Please log in.']);
+            exit;
+        }
+        return $row;
+    } catch (PDOException $e) {
+        echo json_encode(['success' => false, 'message' => 'Server error.']);
+        exit;
+    }
+}
+
+function _customer_logout_session(): void
+{
+    unset(
+        $_SESSION['customer_id'],
+        $_SESSION['customer_code'],
+        $_SESSION['customer_name'],
+        $_SESSION['customer_mobile'],
+        $_SESSION['customer_token']
+    );
+}
 /* ---------- SETTINGS (id=1) ---------- */
 if (!function_exists('getSettings')) {
     function getSettings($pdo)
@@ -36,7 +86,9 @@ if (!function_exists('getCategories')) {
             $stmt->bindValue(1, (int)$limit, PDO::PARAM_INT);
             $stmt->execute();
             return $stmt->fetchAll();
-        } catch (PDOException $e) { return []; }
+        } catch (PDOException $e) {
+            return [];
+        }
     }
 }
 
@@ -60,13 +112,16 @@ if (!function_exists('getProducts')) {
             $stmt->bindValue(2, (int)$offset, PDO::PARAM_INT);
             $stmt->execute();
             return $stmt->fetchAll();
-        } catch (PDOException $e) { return []; }
+        } catch (PDOException $e) {
+            return [];
+        }
     }
 }
 
 /* ---------- POPULAR PRODUCTS ---------- */
 if (!function_exists('getPopularProducts')) {
-    function getPopularProducts($pdo, $limit = 4) {
+    function getPopularProducts($pdo, $limit = 4)
+    {
         return getProducts($pdo, $limit, 0);
     }
 }
@@ -88,7 +143,9 @@ if (!function_exists('getActiveMenus')) {
                  ORDER BY start_at ASC"
             );
             return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        } catch (PDOException $e) { return []; }
+        } catch (PDOException $e) {
+            return [];
+        }
     }
 }
 
@@ -137,7 +194,9 @@ if (!function_exists('getMenuProducts')) {
             $stmt->bindValue(2, (int)$limit, PDO::PARAM_INT);
             $stmt->execute();
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (PDOException $e) { return []; }
+        } catch (PDOException $e) {
+            return [];
+        }
     }
 }
 
@@ -167,7 +226,9 @@ if (!function_exists('getMenuCategories')) {
             $stmt->bindValue(2, (int)$limit, PDO::PARAM_INT);
             $stmt->execute();
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (PDOException $e) { return []; }
+        } catch (PDOException $e) {
+            return [];
+        }
     }
 }
 
@@ -216,12 +277,14 @@ if (!function_exists('groupMenuProductsByProduct')) {
 
 /* ---------- IMAGE HELPERS ---------- */
 if (!function_exists('productImageUrl')) {
-    function productImageUrl($img) {
+    function productImageUrl($img)
+    {
         return empty($img) ? '' : ADMIN_URL . $img;
     }
 }
 if (!function_exists('categoryImageUrl')) {
-    function categoryImageUrl($img) {
+    function categoryImageUrl($img)
+    {
         return empty($img) ? '' : ADMIN_URL . $img;
     }
 }
@@ -284,7 +347,8 @@ if (!function_exists('cleanExpiredMenuCart')) {
                     $_SESSION['cart'] = $rebuilt;
                 }
             }
-        } catch (PDOException $e) { }
+        } catch (PDOException $e) {
+        }
 
         return $removed;
     }

@@ -1,6 +1,18 @@
 <?php
 $todayOfferImg    = !empty($settings['today_offer_image'])    ? ADMIN_URL . $settings['today_offer_image']    : '';
 $tomorrowOfferImg = !empty($settings['tomorrow_offer_image']) ? ADMIN_URL . $settings['tomorrow_offer_image'] : '';
+/* ---------- OFFER CARD EXPIRY FLAGS ---------- */
+$todayMenuExpired    = true;
+$tomorrowMenuExpired = true;
+
+foreach ($activeMenus as $i => $m) {
+    $endTs = strtotime($m['end_at'] ?? '');
+    if (!$endTs) continue;
+
+    // index 0 = today, index 1 = tomorrow (matches your panel labels)
+    if ($i === 0 && time() <= $endTs) $todayMenuExpired    = false;
+    if ($i === 1 && time() <= $endTs) $tomorrowMenuExpired = false;
+}
 ?>
 <?php if ($todayOfferImg || $tomorrowOfferImg): ?>
     <!-- ================= OFFER CARDS ================= -->
@@ -17,12 +29,15 @@ $tomorrowOfferImg = !empty($settings['tomorrow_offer_image']) ? ADMIN_URL . $set
                             <i class="bi bi-sunrise"></i>
                         </div>
                     <?php endif; ?>
-                    <div class="mm-offer-btn-wrap">
-                        <a href="tomorrow-menu.php" class="mm-offer-btn mm-offer-btn-tomorrow">
-                            <i class="bi bi-arrow-right"></i>
-                            <span>View Menu</span>
-                        </a>
-                    </div>
+
+                    <?php if (empty($tomorrowMenuExpired)): ?>
+                        <div class="mm-offer-btn-wrap">
+                            <a href="tomorrow-menu.php" class="mm-offer-btn mm-offer-btn-tomorrow">
+                                <i class="bi bi-arrow-right"></i>
+                                <span>View Menu</span>
+                            </a>
+                        </div>
+                    <?php endif; ?>
                 </div>
 
                 <!-- RIGHT = TODAY OFFER -->
@@ -34,12 +49,15 @@ $tomorrowOfferImg = !empty($settings['tomorrow_offer_image']) ? ADMIN_URL . $set
                             <i class="bi bi-fire"></i>
                         </div>
                     <?php endif; ?>
-                    <div class="mm-offer-btn-wrap">
-                        <a href="today-menu.php" class="mm-offer-btn mm-offer-btn-today">
-                            <i class="bi bi-arrow-right"></i>
-                            <span>View Menu</span>
-                        </a>
-                    </div>
+
+                    <?php if (empty($todayMenuExpired)): ?>
+                        <div class="mm-offer-btn-wrap">
+                            <a href="today-menu.php" class="mm-offer-btn mm-offer-btn-today">
+                                <i class="bi bi-arrow-right"></i>
+                                <span>View Menu</span>
+                            </a>
+                        </div>
+                    <?php endif; ?>
                 </div>
 
             </div>
@@ -137,15 +155,17 @@ $tomorrowOfferImg = !empty($settings['tomorrow_offer_image']) ? ADMIN_URL . $set
             .mm-offers {
                 padding: 16px 0 0;
             }
-            
+
             .mm-offers-grid {
-                gap: 10px; /* Tighter gap on mobile */
+                gap: 10px;
+                /* Tighter gap on mobile */
             }
 
             /* Slightly adjust button size for mobile */
             .mm-offer-btn {
                 padding: 8px 12px;
-                font-size: 10px; /* Smaller text to fit side-by-side */
+                font-size: 10px;
+                /* Smaller text to fit side-by-side */
                 gap: 4px;
             }
 

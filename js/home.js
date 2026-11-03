@@ -1,6 +1,6 @@
 /* =========================================================
    MRS MILL@ — CUSTOMER STORE
-   File: ./js/home.js
+   File: ./js/home.js   (v2026-11-03d)
    ========================================================= */
 
 (function () {
@@ -8,6 +8,56 @@
 
     const MAIN_URL = (typeof window.MAIN_URL === "string" && window.MAIN_URL) ? window.MAIN_URL : "./";
     let IS_LOGGED_IN = !!window.IS_LOGGED_IN;
+
+    const Swal_ = (typeof window.Swal !== "undefined") ? window.Swal : null;
+
+    /* -----------------------------------------------------------
+       SweetAlert helpers
+       ----------------------------------------------------------- */
+    function sToast(msg, type) {
+        type = type || "info";
+        if (Swal_) {
+            const icon = (type === "error") ? "error" : (type === "success" ? "success" : "info");
+            Swal_.fire({
+                toast: true,
+                position: "top-end",
+                icon: icon,
+                title: msg,
+                showConfirmButton: false,
+                timer: 3000,
+                timerProgressBar: true,
+                customClass: {
+                    container: 'swal-high-z-index' // Force high z-index
+                }
+            });
+            return;
+        }
+        let t = document.getElementById("mmToast");
+        if (!t) { t = document.createElement("div"); t.id = "mmToast"; document.body.appendChild(t); }
+        t.textContent = msg;
+        t.className = "show" + (type === "error" ? " error" : "");
+        clearTimeout(t._t);
+        t._t = setTimeout(() => (t.className = ""), 2800);
+    }
+
+    function sModal(title, html, icon) {
+        if (Swal_) {
+            return Swal_.fire({
+                title: title || "",
+                html: html || "",
+                icon: icon || "info",
+                confirmButtonColor: "#b51f2c",
+                confirmButtonText: "OK",
+                allowOutsideClick: true,
+                allowEscapeKey: true,
+            });
+        }
+        alert((title || "") + "\n\n" + String(html || "").replace(/<[^>]+>/g, ""));
+        return Promise.resolve();
+    }
+
+    window.sToast = sToast;
+    window.sModal = sModal;
 
     /* ---------- DOM ---------- */
     const loginOverlay = document.getElementById("loginOverlay");
@@ -26,6 +76,7 @@
     const regName = document.getElementById("regName");
     const regPassword = document.getElementById("regPassword");
     const regPasswordField = document.getElementById("regPasswordField");
+    const regReferrer = document.getElementById("regReferrer");
     const regAptSearch = document.getElementById("regApartmentSearch");
     const regAptList = document.getElementById("regApartmentList");
     const regAptId = document.getElementById("regApartmentId");
@@ -78,19 +129,6 @@
             .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     }
 
-    function showToast(msg, type) {
-        let toast = document.getElementById("mmToast");
-        if (!toast) {
-            toast = document.createElement("div");
-            toast.id = "mmToast";
-            document.body.appendChild(toast);
-        }
-        toast.textContent = msg;
-        toast.className = "show" + (type === "error" ? " error" : "");
-        clearTimeout(toast._timer);
-        toast._timer = setTimeout(() => toast.className = "", 2600);
-    }
-
     function openOverlay(el) {
         if (!el) return;
         el.classList.add("show");
@@ -104,7 +142,6 @@
         document.body.style.overflow = "";
     }
 
-    /* ---------- GLOBAL: close all dropdowns when clicking outside ---------- */
     function closeAllDropdowns() {
         if (regAptList) regAptList.style.display = "none";
         if (regBlockList) regBlockList.style.display = "none";
@@ -113,8 +150,7 @@
     }
 
     document.addEventListener("click", function (e) {
-        // If click is NOT on the dropdown or its input, close all dropdowns
-        const isInsideDropdown =
+        const inside =
             e.target.closest("#regApartmentList") ||
             e.target.closest("#regBlockList") ||
             e.target.closest("#regFloorList") ||
@@ -123,13 +159,9 @@
             e.target.closest("#regBlock") ||
             e.target.closest("#regFloor") ||
             e.target.closest("#regDoorNo");
-
-        if (!isInsideDropdown) {
-            closeAllDropdowns();
-        }
+        if (!inside) closeAllDropdowns();
     });
 
-    /* Password eye toggle */
     document.addEventListener("click", function (e) {
         const btn = e.target.closest(".pw-toggle");
         if (!btn) return;
@@ -210,7 +242,7 @@
     document.addEventListener("DOMContentLoaded", refreshCartUI);
     if (document.readyState !== "loading") refreshCartUI();
 
-    /* LOGIN */
+    /* ---------- LOGIN ---------- */
     function openLogin() {
         if (loginMobile) loginMobile.value = "";
         if (loginPassword) loginPassword.value = "";
@@ -251,7 +283,7 @@
                 if (!res || !res.success || !res.data) return;
                 if (res.data.has_pending_request) {
                     closeLogin();
-                    showToast("You've already sent a request. Our team will contact you soon.", "error");
+                    sModal("Request already sent", "You've already sent a request. Our team will contact you soon.", "info");
                     return;
                 }
                 if (res.data.exists) {
@@ -274,7 +306,7 @@
             const mobile = (loginMobile.value || "").trim();
             const password = (loginPassword.value || "").trim();
             if (!/^[0-9]{10,15}$/.test(mobile)) {
-                showToast("Mobile must be 10–15 digits.", "error");
+                sToast("Mobile must be 10–15 digits.", "error");
                 loginMobile.focus();
                 return;
             }
@@ -290,12 +322,12 @@
                     loginBtn.disabled = false;
                     loginBtnText.textContent = "Continue";
                     if (!res || !res.success || !res.data) {
-                        showToast((res && res.message) || "Lookup failed.", "error");
+                        sToast((res && res.message) || "Lookup failed.", "error");
                         return;
                     }
                     if (res.data.has_pending_request) {
                         closeLogin();
-                        showToast("You've already sent a request. Our team will contact you soon.", "error");
+                        sModal("Request already sent", "You've already sent a request. Our team will contact you soon.", "info");
                         return;
                     }
                     if (res.data.exists) {
@@ -315,13 +347,13 @@
                 .catch(() => {
                     loginBtn.disabled = false;
                     loginBtnText.textContent = "Continue";
-                    showToast("Unable to connect.", "error");
+                    sToast("Unable to connect.", "error");
                 });
         });
     }
 
     function submitLogin(mobile, password) {
-        if (!password) { showToast("Please enter your password.", "error"); loginPassword.focus(); return; }
+        if (!password) { sToast("Please enter your password.", "error"); loginPassword.focus(); return; }
         loginBtn.disabled = true;
         loginBtnText.innerHTML = '...';
         const fd = new FormData();
@@ -332,20 +364,20 @@
             .then(res => {
                 loginBtn.disabled = false;
                 loginBtnText.textContent = "Login";
-                if (!res || !res.success) { showToast((res && res.message) || "Login failed.", "error"); return; }
+                if (!res || !res.success) { sToast((res && res.message) || "Login failed.", "error"); return; }
                 IS_LOGGED_IN = true;
                 closeLogin();
-                showToast("Welcome back!");
-                setTimeout(() => window.location.reload(), 700);
+                sToast("Welcome back!", "success");
+                setTimeout(() => window.location.reload(), 800);
             })
             .catch(() => {
                 loginBtn.disabled = false;
                 loginBtnText.textContent = "Login";
-                showToast("Unable to connect.", "error");
+                sToast("Unable to connect.", "error");
             });
     }
 
-    /* REGISTER */
+    /* ---------- REGISTER ---------- */
     function setRegMode(mode) {
         state.regMode = mode;
         if (btnAptMode) btnAptMode.classList.toggle("active", mode === "apartment");
@@ -387,8 +419,8 @@
         regHouseImg.addEventListener("change", function () {
             const file = this.files && this.files[0];
             if (!file) return;
-            if (!/^image\//.test(file.type)) { showToast("Please choose an image file.", "error"); return; }
-            if (file.size > 3 * 1024 * 1024) { showToast("Image must be under 3 MB.", "error"); return; }
+            if (!/^image\//.test(file.type)) { sToast("Please choose an image file.", "error"); return; }
+            if (file.size > 3 * 1024 * 1024) { sToast("Image must be under 3 MB.", "error"); return; }
             const reader = new FileReader();
             reader.onload = function (evt) {
                 state.regHouseImgData = evt.target.result;
@@ -406,6 +438,7 @@
         if (regName) regName.value = (customerData && customerData.name) ? customerData.name : "";
         if (regPassword) regPassword.value = "";
         if (regPasswordField) regPasswordField.style.display = "";
+        if (regReferrer) regReferrer.value = "";
 
         closeAllDropdowns();
         state.customApartment = false;
@@ -491,7 +524,6 @@
                 if (apt) selectApartmentForVariant(apt);
 
                 closeAllDropdowns();
-                // Auto-focus block after selecting an apartment
                 setTimeout(() => regBlock && regBlock.focus(), 100);
             });
         });
@@ -636,13 +668,15 @@
             renderRegAptList(this.value);
         });
         regAptSearch.addEventListener("blur", function () {
-            // Small delay so click on list item registers first
             setTimeout(() => {
                 if (regAptList) regAptList.style.display = "none";
             }, 200);
         });
     }
 
+    /* =========================================================
+       REGISTER SUBMIT — modal stays open on validation errors
+       ========================================================= */
     if (regForm) {
         regForm.addEventListener("submit", function (e) {
             e.preventDefault();
@@ -650,30 +684,36 @@
             const mobile = regMobile ? (regMobile.value || "").trim() : "";
             const name = regName ? (regName.value || "").trim() : "";
             const password = regPassword ? (regPassword.value || "").trim() : "";
+            const referrer = regReferrer ? (regReferrer.value || "").trim() : "";
 
+            /* ---------- Client-side validation (modal stays open) ---------- */
             if (name.length < 3) {
-                showToast("Name must be at least 3 characters.", "error");
+                sModal("Invalid Name", "Name must be at least 3 characters.", "warning");
+                if (regName) regName.focus();
                 return;
             }
             if (password.length < 3) {
-                showToast("Password must be at least 3 characters.", "error");
+                sModal("Invalid Password", "Password must be at least 3 characters.", "warning");
                 if (regPassword) regPassword.focus();
                 return;
             }
 
+            /* ---------- Build FormData ---------- */
             const fd = new FormData();
             fd.append("full_name", name);
             fd.append("mobile_number", mobile);
             fd.append("password", password);
+            fd.append("referrer", referrer);
 
             if (state.regMode === "individual_house") {
                 const houseAddr = regHouseAddress ? (regHouseAddress.value || "").trim() : "";
                 if (!houseAddr) {
-                    showToast("Full address is required.", "error");
+                    sModal("Missing Address", "Full address is required.", "warning");
+                    if (regHouseAddress) regHouseAddress.focus();
                     return;
                 }
                 if (!state.regHouseMapLink) {
-                    showToast("Please pin your location first.", "error");
+                    sModal("Missing Location", "Please pin your location first.", "warning");
                     return;
                 }
                 fd.append("request_type", "individual_house");
@@ -688,11 +728,15 @@
                 const doorNo = regDoorNo ? (regDoorNo.value || "").trim() : "";
 
                 if (!aptText) {
-                    showToast("Apartment is required.", "error");
+                    sModal("Missing Apartment", "Apartment is required.", "warning");
+                    if (regAptSearch) regAptSearch.focus();
                     return;
                 }
                 if (!block || !floor || !doorNo) {
-                    showToast("Please enter Block, Floor and Door No.", "error");
+                    sModal("Missing Address Details", "Please enter Block, Floor and Door No.", "warning");
+                    if (!block && regBlock) regBlock.focus();
+                    else if (!floor && regFloor) regFloor.focus();
+                    else if (!doorNo && regDoorNo) regDoorNo.focus();
                     return;
                 }
 
@@ -705,35 +749,48 @@
                 }
             }
 
+            /* ---------- Submit (only NOW close the modal) ---------- */
             if (regBtn) regBtn.disabled = true;
             if (regBtnText) regBtnText.innerHTML = 'Creating…';
 
-            fetch(MAIN_URL + "ajax/customer-register.php", { method: "POST", body: fd, credentials: "same-origin" })
+            // Close modal only when we are about to actually send the request
+            closeRegister();
+
+            fetch(MAIN_URL + "ajax/customer-register.php", {
+                method: "POST",
+                body: fd,
+                credentials: "same-origin"
+            })
                 .then(r => r.json().catch(() => null))
                 .then(res => {
                     if (regBtn) regBtn.disabled = false;
                     if (regBtnText) regBtnText.textContent = "Create Account";
 
                     if (!res || !res.success) {
-                        showToast((res && res.message) || "Failed.", "error");
+                        sModal("Registration Failed", (res && res.message) || "Please try again.", "error");
                         return;
                     }
-                    closeRegister();
+
                     if (res.data && res.data.request_only) {
-                        showToast(res.message || "Request submitted. Admin will contact you.");
+                        const extra = res.data.already_requested
+                            ? "<br><br>You already sent a request earlier."
+                            : "";
+                        sModal("Request Submitted", (res.message || "Our team will contact you soon.") + extra, "success");
                         return;
                     }
+
                     IS_LOGGED_IN = true;
-                    showToast("Account created! Welcome!");
-                    setTimeout(() => window.location.reload(), 800);
+                    sToast("Account created! Welcome!", "success");
+                    setTimeout(() => window.location.reload(), 1000);
                 })
                 .catch(() => {
                     if (regBtn) regBtn.disabled = false;
                     if (regBtnText) regBtnText.textContent = "Create Account";
-                    showToast("Unable to connect.", "error");
+                    sModal("Network Error", "Unable to connect. Please try again.", "error");
                 });
         });
     }
+
     /* =========================================================
        PRODUCT CARDS
        ========================================================= */
@@ -859,7 +916,7 @@
         btn.addEventListener("click", function () {
             const card = btn.closest(".js-product-card");
             if (!card) return;
-            if (!IS_LOGGED_IN) { showToast("Please log in.", "error"); openLogin(); return; }
+            if (!IS_LOGGED_IN) { sToast("Please log in.", "error"); openLogin(); return; }
             const productId = Number(card.dataset.productId || 0);
             const menuCode = card.dataset.menuCode || "";
             const rows = card.querySelectorAll(".mm-variant-row");
@@ -883,11 +940,11 @@
                 .then(res => {
                     btn.classList.remove("adding");
                     if (!res || !res.success) {
-                        showToast((res && res.message) || "Failed.", "error");
+                        sToast((res && res.message) || "Failed.", "error");
                         updateCardState(card);
                         return;
                     }
-                    showToast("Cart updated.");
+                    sToast("Cart updated.", "success");
                     if (res.data) {
                         updateCartBadges(
                             Number(res.data.cart_count || 0),
@@ -898,7 +955,7 @@
                 })
                 .catch(() => {
                     btn.classList.remove("adding");
-                    showToast("Unable to connect.", "error");
+                    sToast("Unable to connect.", "error");
                     updateCardState(card);
                 });
         });

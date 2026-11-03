@@ -113,6 +113,96 @@ function validateCoupon(PDO $pdo, string $code, float $cartTotal): ?array
 }
 
 /* =========================================================
+   FETCH AVAILABLE COUPONS + ACTIVE TIME OFFERS
+   ========================================================= */
+function getAvailableOffers(PDO $pdo): array
+{
+    $out     = [];
+    $nowDate = date('Y-m-d');
+
+    try {
+        $stmt = $pdo->prepare(
+            "SELECT d.discount_name, d.coupon_code, d.usage_limit, d.used_count,
+                    dt.amount_type, dt.discount_amount
+             FROM discounts d
+             INNER JOIN discount_times dt ON dt.discount_code = d.discount_code
+             WHERE d.status = 1
+               AND d.discount_type = 'coupon'
+               AND d.coupon_code IS NOT NULL
+               AND d.coupon_code != ''
+               AND (d.valid_from_date IS NULL OR d.valid_from_date <= ?)
+               AND (d.valid_to_date IS NULL OR d.valid_to_date >= ?)
+             ORDER BY dt.discount_amount DESC"
+        );
+        $stmt->execute([$nowDate, $nowDate]);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if ((int)$r['usage_limit'] > 0 && (int)$r['used_count'] >= (int)$r['usage_limit']) continue;
+            $out[] = [
+                'type'  => 'coupon',
+                'code'  => $r['coupon_code'],
+                'name'  => $r['discount_name'],
+                'label' => $r['amount_type'] === 'percent'
+                    ? number_format($r['discount_amount'], 0) . '% OFF'
+                    : '₹' . number_format($r['discount_amount'], 0) . ' OFF',
+            ];
+        }
+    } catch (PDOException $e) {
+    }
+
+    try {
+        $mStmt = $pdo->prepare(
+            "SELECT menu_code, menu_name, start_at, end_at
+             FROM menus WHERE status = 1 AND start_at <= NOW() AND end_at >= NOW()"
+        );
+        $mStmt->execute();
+        $menus = $mStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($menus as $menu) {
+            $menuStart = strtotime($menu['start_at']);
+            $menuEnd   = strtotime($menu['end_at']);
+            $now       = time();
+            if ($now < $menuStart || $now > $menuEnd) continue;
+
+            $dStmt = $pdo->prepare(
+                "SELECT dt.amount_type, dt.discount_amount, dt.start_time, dt.end_time
+                 FROM discounts d
+                 INNER JOIN discount_times dt ON dt.discount_code = d.discount_code
+                 WHERE d.status = 1 AND d.discount_type = 'time'
+                 ORDER BY dt.id ASC"
+            );
+            $dStmt->execute();
+            $slots = $dStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $prevEndEpoch = $menuStart;
+            $baseDay      = date('Y-m-d', $menuStart);
+            $cur          = null;
+            foreach ($slots as $s) {
+                $slotEndTs = strtotime($baseDay . ' ' . $s['end_time']);
+                if ($slotEndTs < $prevEndEpoch) $slotEndTs += 86400;
+                if ($now >= $prevEndEpoch && $now <= $slotEndTs) {
+                    $cur = $s;
+                    break;
+                }
+                $prevEndEpoch = $slotEndTs;
+            }
+            if ($cur && (float)$cur['discount_amount'] > 0) {
+                $out[] = [
+                    'type'  => 'time',
+                    'code'  => 'TIME:' . $menu['menu_code'],
+                    'name'  => $menu['menu_name'] . ' (Live)',
+                    'label' => $cur['amount_type'] === 'percent'
+                        ? number_format((float)$cur['discount_amount'], 0) . '% OFF'
+                        : '₹' . number_format((float)$cur['discount_amount'], 0) . ' OFF',
+                ];
+            }
+        }
+    } catch (PDOException $e) {
+    }
+
+    return $out;
+}
+
+/* =========================================================
    LOGGED-IN CUSTOMER
    ========================================================= */
 $customerLoggedIn = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0;
@@ -159,16 +249,32 @@ if ($customerRowId > 0) {
 
             $customerWalletBalance = (float)($cust['wallet_balance'] ?? 0);
 
+            /* =====================================================
+               ✅ FIX: Both address types now read delivery_charge
+               ===================================================== */
             if ($customerAddressType === 'individual_house') {
                 $customerFullAddress = $customerAddress['full_address'] ?? '';
                 $customerMapLink     = $customerAddress['map_link']     ?? '';
                 $customerHouseImage  = $customerAddress['house_image']  ?? '';
+
+                /* Individual house: prefer delivery_charge, fall back to charge */
+                $customerDivisionCharge = (float)(
+                    $customerAddress['delivery_charge']
+                    ?? $customerAddress['charge']
+                    ?? 0
+                );
             } else {
                 $customerApartmentId    = (int)($customerAddress['apartment_id']  ?? 0);
                 $customerApartmentCode  = $customerAddress['apartment_code'] ?? '';
                 $customerApartmentName  = $customerAddress['apartment_name'] ?? '';
                 $customerDivision       = $customerAddress['division_label'] ?? '';
-                $customerDivisionCharge = (float)($customerAddress['charge'] ?? 0);
+
+                /* Apartment: prefer delivery_charge, fall back to charge */
+                $customerDivisionCharge = (float)(
+                    $customerAddress['delivery_charge']
+                    ?? $customerAddress['charge']
+                    ?? 0
+                );
             }
         }
     } catch (PDOException $e) {
@@ -191,9 +297,7 @@ if ($customerRowId > 0) {
              ORDER BY id ASC"
         );
         $stmt->execute([$customerRowId]);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-        foreach ($rows as $r) {
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $cart[] = [
                 'cart_id'      => $r['cart_id'],
                 'menu_code'    => $r['menu_code'] ?? '',
@@ -283,105 +387,96 @@ if (!empty($cart)) {
 $containerTotalRound = (int)round($containerTotal);
 
 /* =========================================================
-   COUPON APPLIED (Session)
+   DISCOUNT CALCULATION — CHOSEN + LOYALTY
    ========================================================= */
-$couponCode   = '';
-$couponResult = null;
+$totalDiscountAmount  = 0;
+$discountLabels       = [];
+$appliedDiscount      = $_SESSION['applied_discount'] ?? null;
+$appliedDiscountType  = '';
+$appliedDiscountCode  = '';
+$appliedDiscountLabel = '';
 
-if (!empty($_SESSION['applied_coupon'])) {
-    $couponResult = validateCoupon($pdo, $_SESSION['applied_coupon'], $cartTotal);
-    if ($couponResult && empty($couponResult['error'])) {
-        $couponCode = $couponResult['code'];
-    } else {
-        unset($_SESSION['applied_coupon']);
-        $couponResult = null;
-    }
-}
+if (is_array($appliedDiscount) && !empty($appliedDiscount['type']) && !empty($appliedDiscount['code'])) {
+    $appliedDiscountType = $appliedDiscount['type'];
+    $appliedDiscountCode = $appliedDiscount['code'];
 
-/* =========================================================
-   DISCOUNT CALCULATION (TIME + LOYALTY + COUPON)
-   ========================================================= */
-$totalDiscountAmount = 0;
-$discountLabels = [];
-
-// --- A) TIME-BASED DISCOUNT ---
-$cartGroupedByMenu = [];
-foreach ($cart as $c) {
-    $mc = $c['menu_code'] ?: 'GENERAL';
-    if (!isset($cartGroupedByMenu[$mc])) {
-        $cartGroupedByMenu[$mc] = ['items' => [], 'subtotal' => 0];
-    }
-    $cartGroupedByMenu[$mc]['items'][] = $c;
-    $cartGroupedByMenu[$mc]['subtotal'] += ($c['price'] * $c['qty']);
-}
-
-foreach ($cartGroupedByMenu as $menuCode => $group) {
-    $menuSubtotal = $group['subtotal'];
-    $discountAmount = 0;
-
-    if ($menuCode !== 'GENERAL') {
-        $menuInfo = null;
-        try {
-            $mStmt = $pdo->prepare("SELECT * FROM menus WHERE menu_code = ? LIMIT 1");
-            $mStmt->execute([$menuCode]);
-            $menuInfo = $mStmt->fetch(PDO::FETCH_ASSOC);
-        } catch (PDOException $e) {
+    if ($appliedDiscountType === 'coupon') {
+        $cRes = validateCoupon($pdo, $appliedDiscountCode, $cartTotal);
+        if ($cRes && empty($cRes['error']) && $cRes['discount'] > 0) {
+            $totalDiscountAmount  += $cRes['discount'];
+            $appliedDiscountLabel  = $cRes['label'];
+            $discountLabels[] = ['label' => $cRes['label'], 'menu_name' => 'Coupon ' . $appliedDiscountCode];
+        } else {
+            unset($_SESSION['applied_discount']);
+            $appliedDiscountType = '';
+            $appliedDiscountCode = '';
         }
-
-        if ($menuInfo) {
-            $menuStart = strtotime($menuInfo['start_at']);
-            $menuEnd   = strtotime($menuInfo['end_at']);
-            $now       = time();
-
-            if ($now >= $menuStart && $now <= $menuEnd) {
-                $dStmt = $pdo->prepare(
-                    "SELECT d.discount_code, d.discount_name,
-                            dt.slot_name, dt.start_time, dt.end_time,
-                            dt.amount_type, dt.discount_amount, dt.delivery_enabled
-                     FROM discounts d
-                     INNER JOIN discount_times dt ON dt.discount_code = d.discount_code
-                     WHERE d.status = 1 AND d.discount_type = 'time'
-                     ORDER BY dt.id ASC"
-                );
-                $dStmt->execute();
-                $slots = $dStmt->fetchAll(PDO::FETCH_ASSOC);
-
-                $prevEndEpoch = $menuStart;
-                $baseDay      = date('Y-m-d', $menuStart);
-                $currentDiscount = null;
-
-                foreach ($slots as $s) {
-                    $slotEndTs = strtotime($baseDay . ' ' . $s['end_time']);
-                    if ($slotEndTs < $prevEndEpoch) $slotEndTs += 86400;
-
-                    if ($now >= $prevEndEpoch && $now <= $slotEndTs) {
-                        $currentDiscount = [
-                            'name'        => $s['discount_name'],
-                            'amount_type' => $s['amount_type'],
-                            'amount'      => (float)$s['discount_amount'],
-                        ];
-                        break;
-                    }
-                    $prevEndEpoch = $slotEndTs;
-                }
-
-                if ($currentDiscount && $currentDiscount['amount'] > 0) {
-                    if ($currentDiscount['amount_type'] === 'percent') {
-                        $discountAmount = round(($menuSubtotal * $currentDiscount['amount']) / 100);
-                        $discountLabel  = number_format($currentDiscount['amount'], 0) . '% OFF';
-                    } else {
-                        $discountAmount = min((float)$currentDiscount['amount'], $menuSubtotal);
-                        $discountLabel  = '₹' . number_format($currentDiscount['amount'], 0) . ' OFF';
-                    }
-                    $totalDiscountAmount += $discountAmount;
-                    $discountLabels[] = ['label' => $discountLabel, 'menu_name' => $menuInfo['menu_name']];
-                }
+    } elseif ($appliedDiscountType === 'time') {
+        $menuCode     = $appliedDiscountCode;
+        $menuSubtotal = 0;
+        foreach ($cart as $c) {
+            if (($c['menu_code'] ?: 'GENERAL') === $menuCode) {
+                $menuSubtotal += $c['price'] * $c['qty'];
             }
         }
+        if ($menuSubtotal > 0) {
+            try {
+                $mStmt = $pdo->prepare("SELECT * FROM menus WHERE menu_code = ? LIMIT 1");
+                $mStmt->execute([$menuCode]);
+                $menuInfo = $mStmt->fetch(PDO::FETCH_ASSOC);
+                if ($menuInfo) {
+                    $menuStart = strtotime($menuInfo['start_at']);
+                    $menuEnd   = strtotime($menuInfo['end_at']);
+                    $now       = time();
+                    if ($now >= $menuStart && $now <= $menuEnd) {
+                        $dStmt = $pdo->prepare(
+                            "SELECT dt.amount_type, dt.discount_amount, dt.start_time, dt.end_time
+                             FROM discounts d
+                             INNER JOIN discount_times dt ON dt.discount_code = d.discount_code
+                             WHERE d.status = 1 AND d.discount_type = 'time'
+                             ORDER BY dt.id ASC"
+                        );
+                        $dStmt->execute();
+                        $slots = $dStmt->fetchAll(PDO::FETCH_ASSOC);
+
+                        $prevEndEpoch = $menuStart;
+                        $baseDay      = date('Y-m-d', $menuStart);
+                        $cur          = null;
+                        foreach ($slots as $s) {
+                            $slotEndTs = strtotime($baseDay . ' ' . $s['end_time']);
+                            if ($slotEndTs < $prevEndEpoch) $slotEndTs += 86400;
+                            if ($now >= $prevEndEpoch && $now <= $slotEndTs) {
+                                $cur = $s;
+                                break;
+                            }
+                            $prevEndEpoch = $slotEndTs;
+                        }
+                        if ($cur && (float)$cur['discount_amount'] > 0) {
+                            if ($cur['amount_type'] === 'percent') {
+                                $amt = round(($menuSubtotal * (float)$cur['discount_amount']) / 100);
+                                $lbl = number_format((float)$cur['discount_amount'], 0) . '% OFF';
+                            } else {
+                                $amt = min((float)$cur['discount_amount'], $menuSubtotal);
+                                $lbl = '₹' . number_format((float)$cur['discount_amount'], 0) . ' OFF';
+                            }
+                            $totalDiscountAmount += $amt;
+                            $appliedDiscountLabel = $lbl;
+                            $discountLabels[] = ['label' => $lbl, 'menu_name' => $menuInfo['menu_name'] . ' (Time offer)'];
+                        }
+                    }
+                }
+            } catch (PDOException $e) {
+            }
+        }
+        if ($totalDiscountAmount <= 0) {
+            unset($_SESSION['applied_discount']);
+            $appliedDiscountType = '';
+            $appliedDiscountCode = '';
+        }
     }
 }
 
-// --- B) CUSTOMER LOYALTY DISCOUNT ---
+// Loyalty always auto
 $loyaltyDiscount = getCustomerLoyaltyDiscount($pdo, $customerRowId);
 $loyaltyAmount   = 0;
 if ($loyaltyDiscount) {
@@ -401,36 +496,24 @@ if ($loyaltyDiscount) {
     }
 }
 
-// --- C) COUPON DISCOUNT ---
-$couponAmount = 0;
-if ($couponResult && empty($couponResult['error'])) {
-    $couponAmount = $couponResult['discount'];
-    if ($couponAmount > 0) {
-        $totalDiscountAmount += $couponAmount;
-        $discountLabels[] = [
-            'label' => $couponResult['label'],
-            'menu_name' => 'Coupon ' . $couponResult['code']
-        ];
-    }
-}
-
-// --- D) DISPLAY LABEL ---
 $displayDiscountLabel = '';
 if (count($discountLabels) === 1) {
     $displayDiscountLabel = $discountLabels[0]['label'];
 } elseif (count($discountLabels) > 1) {
     $parts = [];
-    foreach ($discountLabels as $lbl) {
-        $parts[] = $lbl['label'];
-    }
+    foreach ($discountLabels as $lbl) $parts[] = $lbl['label'];
     $displayDiscountLabel = implode(' + ', $parts);
 }
 
 if ($totalDiscountAmount > $cartTotal) $totalDiscountAmount = $cartTotal;
-
-$discountAmountRound = (int)round($totalDiscountAmount);
-$discountedSubtotal  = max(0, $cartTotal - $discountAmountRound);
+$discountAmountRound     = (int)round($totalDiscountAmount);
+$discountedSubtotal      = max(0, $cartTotal - $discountAmountRound);
 $discountedSubtotalRound = (int)round($discountedSubtotal);
+
+/* =========================================================
+   INLINE OFFERS LIST
+   ========================================================= */
+$availableOffers = getAvailableOffers($pdo);
 
 /* =========================================================
    TAX
@@ -454,11 +537,11 @@ if ($taxStatus === 1 && $taxRate > 0) {
 }
 
 /* =========================================================
-   WALLET + PAYABLE
+   WALLET + PAYABLE (initial server-side preview; JS recomputes)
    ========================================================= */
 $walletBalance      = (float)$customerWalletBalance;
-$walletApplied      = min($walletBalance, $foodPlusTax);
-$payableNow         = max(0, $foodPlusTax - $walletApplied);
+$walletApplied      = min($walletBalance, $foodPlusTax + $customerDivisionCharge);
+$payableNow         = max(0, $foodPlusTax + $customerDivisionCharge - $walletApplied);
 $walletAppliedRound = (int)round($walletApplied);
 $payableNowRound    = (int)round($payableNow);
 
@@ -470,7 +553,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
 <head>
     <?php include_once './includes/head_links.php'; ?>
     <style>
-        /* --- Original Styles --- */
         .mm-mode-wrap {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -838,7 +920,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
             align-items: flex-start;
         }
 
-        /* --- Loyalty Banner --- */
         .mm-loyalty-box {
             margin-top: 12px;
             padding: 12px 14px;
@@ -892,158 +973,218 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
             white-space: nowrap;
         }
 
-        /* --- NEW COUPON STYLES --- */
-        .mm-coupon-trigger {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            padding: 14px;
-            border-radius: 12px;
-            background: linear-gradient(135deg, #fffaf4 0%, #fdf1e2 100%);
-            border: 1.5px dashed #e8d5a8;
+        .mm-offers-box {
             margin-top: 14px;
-            cursor: pointer;
-            transition: .2s;
+            border-radius: 14px;
+            background: #fffdf9;
+            border: 1.5px solid #ece5da;
+            padding: 14px;
         }
 
-        .mm-coupon-trigger:hover {
-            background: #fff5e6;
-            border-color: #b8893c;
-        }
-
-        .mm-coupon-trigger-left {
+        .mm-offers-head {
             display: flex;
             align-items: center;
             gap: 10px;
-            min-width: 0;
+            margin-bottom: 10px;
         }
 
-        .mm-coupon-icon {
-            width: 36px;
-            height: 36px;
-            border-radius: 10px;
+        .mm-offers-icon {
+            width: 34px;
+            height: 34px;
+            border-radius: 9px;
             background: #b8893c;
             color: #fff;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 16px;
+            font-size: 15px;
             flex-shrink: 0;
         }
 
-        .mm-coupon-title {
-            font-size: 12.5px;
+        .mm-offers-title {
+            font-size: 13px;
             font-weight: 800;
-            color: #6f5a3f;
+            color: #302923;
+            margin: 0;
             line-height: 1.2;
         }
 
-        .mm-coupon-applied-code {
-            background: #1f7a3d;
-            color: #fff;
-            padding: 1px 6px;
-            border-radius: 4px;
-            font-size: 11px;
-            letter-spacing: .05em;
-            margin-left: 2px;
-        }
-
-        .mm-coupon-sub {
+        .mm-offers-sub {
             font-size: 10.5px;
             color: #a35a0e;
             font-weight: 600;
             margin-top: 2px;
         }
 
-        .mm-coupon-drawer-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(30, 25, 22, .55);
-            backdrop-filter: blur(3px);
+        .mm-offers-list {
             display: flex;
-            align-items: flex-end;
-            justify-content: center;
-            z-index: 9999;
-            opacity: 0;
-            visibility: hidden;
-            transition: .25s;
-        }
-
-        .mm-coupon-drawer-overlay.show {
-            opacity: 1;
-            visibility: visible;
-        }
-
-        .mm-coupon-drawer {
-            background: #fff;
-            width: 100%;
-            max-width: 520px;
-            border-radius: 20px 20px 0 0;
-            padding: 20px;
-            max-height: 80vh;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 260px;
             overflow-y: auto;
-            transform: translateY(100%);
-            transition: transform .3s cubic-bezier(.2, .9, .3, 1.2);
+            padding-right: 2px;
         }
 
-        .mm-coupon-drawer-overlay.show .mm-coupon-drawer {
-            transform: translateY(0);
-        }
-
-        .mm-coupon-drawer-head {
+        .mm-offer-row {
+            position: relative;
             display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-
-        .mm-coupon-drawer-head h3 {
-            margin: 0;
-            font-family: "Playfair Display", serif;
-            font-size: 18px;
-            font-weight: 700;
-            color: #302923;
-        }
-
-        .mm-coupon-drawer-head p {
-            margin: 2px 0 0;
-            font-size: 11.5px;
-            color: #817a71;
-        }
-
-        .mm-coupon-drawer-close {
-            width: 32px;
-            height: 32px;
-            border-radius: 9px;
-            border: 0;
-            background: #f7f2ec;
-            color: #6f675f;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border: 1.5px solid #ece5da;
+            background: #fff;
+            border-radius: 10px;
             cursor: pointer;
-            font-size: 14px;
+            transition: .15s;
+            user-select: none;
         }
 
-        .mm-coupon-drawer-close:hover {
-            background: #fbeaea;
-            color: #b51f2c;
+        .mm-offer-row:hover {
+            border-color: #d98a91;
+            background: #fff7f7;
         }
 
-        .mm-coupon-manual {
+        .mm-offer-row input[type="radio"] {
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .mm-offer-row::before {
+            content: "";
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 2px solid #d5cbbd;
+            flex-shrink: 0;
+            transition: .15s;
+            background: #fff;
+        }
+
+        .mm-offer-row.selected {
+            border-color: #b51f2c;
+            background: #fff5f5;
+        }
+
+        .mm-offer-row.selected::before {
+            border-color: #b51f2c;
+            box-shadow: inset 0 0 0 4px #b51f2c;
+        }
+
+        .mm-offer-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .mm-offer-name {
+            font-size: 12px;
+            font-weight: 800;
+            color: #302923;
+            margin: 0;
+            line-height: 1.25;
+            word-break: break-word;
+        }
+
+        .mm-offer-code {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin-top: 4px;
+            background: #fdf1e2;
+            color: #a35a0e;
+            font-weight: 800;
+            font-size: 9.5px;
+            padding: 3px 7px;
+            border-radius: 4px;
+            letter-spacing: .04em;
+        }
+
+        .mm-offer-code .lbl {
+            font-weight: 700;
+            color: #8a6a4a;
+            letter-spacing: .02em;
+            opacity: .85;
+        }
+
+        .mm-offer-code .val {
+            font-weight: 900;
+            color: #7a4208;
+            letter-spacing: .06em;
+        }
+
+        .mm-offer-label {
+            font-size: 11px;
+            font-weight: 800;
+            color: #1f7a3d;
+            text-align: right;
+            white-space: nowrap;
+        }
+
+        .mm-offer-empty {
+            font-size: 11.5px;
+            color: #948c82;
+            text-align: center;
+            padding: 12px;
+            font-style: italic;
+        }
+
+        .mm-offer-apply-btn {
+            width: 100%;
+            margin-top: 10px;
+            height: 44px;
+            border: none;
+            background: #b51f2c;
+            color: #fff;
+            border-radius: 10px;
+            font-size: 12.5px;
+            font-weight: 800;
+            cursor: pointer;
+            transition: .15s;
+            letter-spacing: .03em;
+        }
+
+        .mm-offer-apply-btn:hover:not(:disabled) {
+            background: #8e1722;
+        }
+
+        .mm-offer-apply-btn:disabled {
+            opacity: .6;
+            cursor: not-allowed;
+        }
+
+        .mm-offer-msg {
+            font-size: 11px;
+            font-weight: 700;
+            margin-top: 8px;
+            text-align: center;
+            display: none;
+        }
+
+        .mm-offer-msg.error {
+            color: #c62828;
+            display: block;
+        }
+
+        .mm-offer-msg.success {
+            color: #1f7a3d;
+            display: block;
+        }
+
+        .mm-offer-manual {
             display: flex;
             gap: 8px;
-            margin-bottom: 10px;
+            margin-top: 10px;
         }
 
-        .mm-coupon-manual-input {
+        .mm-offer-manual input {
             flex: 1;
-            height: 44px;
+            height: 42px;
             border: 1.5px solid #ece5da;
             background: #fffdf9;
             border-radius: 10px;
-            padding: 0 14px;
-            font-family: "DM Sans", sans-serif;
-            font-size: 12px;
+            padding: 0 12px;
+            font-family: inherit;
+            font-size: 11.5px;
             font-weight: 800;
             color: #302923;
             letter-spacing: .1em;
@@ -1051,148 +1192,25 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
             outline: none;
         }
 
-        .mm-coupon-manual-input:focus {
+        .mm-offer-manual input:focus {
             border-color: #b51f2c;
             box-shadow: 0 0 0 3px rgba(181, 31, 44, .06);
         }
 
-        .mm-coupon-manual-btn {
-            height: 44px;
-            padding: 0 20px;
-            border: none;
-            background: #b51f2c;
-            color: #fff;
+        .mm-offer-manual button {
+            height: 42px;
+            padding: 0 18px;
+            border: 1.5px solid #b51f2c;
+            background: #fff;
+            color: #b51f2c;
             border-radius: 10px;
             font-size: 11.5px;
             font-weight: 800;
             cursor: pointer;
         }
 
-        .mm-coupon-manual-btn:hover:not(:disabled) {
-            background: #8e1722;
-        }
-
-        .mm-coupon-manual-btn:disabled {
-            opacity: .6;
-            cursor: not-allowed;
-        }
-
-        .mm-coupon-msg {
-            font-size: 11px;
-            font-weight: 700;
-            margin-bottom: 10px;
-            display: none;
-        }
-
-        .mm-coupon-msg.error {
-            color: #c62828;
-            display: block;
-        }
-
-        .mm-coupon-msg.success {
-            color: #1f7a3d;
-            display: block;
-        }
-
-        .mm-coupon-list {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            margin-top: 12px;
-        }
-
-        .mm-coupon-loading {
-            padding: 30px;
-            text-align: center;
-            color: #948c82;
-            font-size: 12px;
-        }
-
-        .mm-coupon-card {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 12px 14px;
-            border-radius: 12px;
-            background: #fffdf9;
-            border: 1.5px dashed #e4ddd3;
-            cursor: pointer;
-            transition: .2s;
-        }
-
-        .mm-coupon-card:hover {
-            border-color: #d98a91;
-            background: #fff5f5;
-        }
-
-        .mm-coupon-card-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 10px;
-            background: linear-gradient(135deg, #b51f2c 0%, #8e1722 100%);
-            color: #fff;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 18px;
-            flex-shrink: 0;
-        }
-
-        .mm-coupon-card-info {
-            flex: 1;
-            min-width: 0;
-        }
-
-        .mm-coupon-card-title {
-            font-size: 13px;
-            font-weight: 800;
-            color: #302923;
-            margin: 0;
-        }
-
-        .mm-coupon-card-code {
-            display: inline-block;
-            margin-top: 3px;
-            background: #fdf1e2;
-            color: #a35a0e;
-            font-weight: 800;
-            font-size: 10px;
-            padding: 2px 8px;
-            border-radius: 4px;
-            letter-spacing: .08em;
-        }
-
-        .mm-coupon-card-apply {
-            padding: 8px 12px;
-            border-radius: 8px;
-            border: 1.5px solid #b51f2c;
-            background: #fff;
-            color: #b51f2c;
-            font-size: 11px;
-            font-weight: 800;
-            cursor: pointer;
-            white-space: nowrap;
-        }
-
-        .mm-coupon-card-apply:hover {
+        .mm-offer-manual button:hover {
             background: #b51f2c;
-            color: #fff;
-        }
-
-        .mm-coupon-card-remove {
-            padding: 8px 12px;
-            border-radius: 8px;
-            border: 1.5px solid #c62828;
-            background: #fff;
-            color: #c62828;
-            font-size: 11px;
-            font-weight: 800;
-            cursor: pointer;
-            white-space: nowrap;
-        }
-
-        .mm-coupon-card-remove:hover {
-            background: #c62828;
             color: #fff;
         }
     </style>
@@ -1210,7 +1228,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                 <!-- ================= LEFT: FORM ================= -->
                 <form id="checkoutForm" class="mm-co-form" autocomplete="off" novalidate>
 
-                    <!-- Contact -->
                     <div class="mm-co-card">
                         <h2 class="mm-co-title">Contact</h2>
 
@@ -1244,7 +1261,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                         </div>
                     </div>
 
-                    <!-- Delivery Mode -->
                     <div class="mm-co-card">
                         <h2 class="mm-co-title">How would you like to receive?</h2>
                         <div class="mm-mode-wrap">
@@ -1298,7 +1314,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                         </div>
                     </div>
 
-                    <!-- Order Instructions -->
                     <div class="mm-co-card">
                         <h2 class="mm-co-title">
                             Order Instructions
@@ -1314,7 +1329,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                         </div>
                     </div>
 
-                    <!-- Delivery Address -->
                     <div class="mm-co-card mm-address-block" id="addressBlock">
                         <h2 class="mm-co-title">Delivery Address</h2>
 
@@ -1329,6 +1343,11 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                                 <div class="mm-addr-ro-body">
                                     <p class="mm-addr-ro-title"><?= htmlspecialchars($customerFullAddress) ?></p>
                                     <span class="mm-addr-ro-badge house"><i class="bi bi-house-door"></i> Individual House</span>
+                                    <?php if ($customerDivisionCharge > 0): ?>
+                                        <p class="mm-addr-ro-meta" style="margin-top:8px;">
+                                            Delivery charge: <strong>₹<?= number_format($customerDivisionCharge, 0) ?></strong>
+                                        </p>
+                                    <?php endif; ?>
                                     <div class="mm-addr-ro-links">
                                         <?php if ($customerMapLink !== ''): ?>
                                             <a href="<?= htmlspecialchars($customerMapLink) ?>" target="_blank" rel="noopener noreferrer" class="mm-addr-ro-link map">
@@ -1357,6 +1376,8 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                             <input type="hidden" id="coFullAddress" value="<?= htmlspecialchars($customerFullAddress) ?>">
                             <input type="hidden" id="coMapLink" value="<?= htmlspecialchars($customerMapLink) ?>">
                             <input type="hidden" id="coHouseImage" value="<?= htmlspecialchars($customerHouseImage) ?>">
+                            <!-- ✅ hidden field so JS can read the house delivery charge -->
+                            <input type="hidden" id="coDivisionCharge" value="<?= (float)$customerDivisionCharge ?>">
 
                         <?php elseif ($customerLoggedIn && $customerApartmentId > 0): ?>
                             <div class="mm-addr-readonly">
@@ -1448,6 +1469,60 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                         <?php endforeach; ?>
                     </div>
 
+                    <div class="mm-offers-box">
+                        <div class="mm-offers-head">
+                            <div class="mm-offers-icon"><i class="bi bi-ticket-perforated-fill"></i></div>
+                            <div>
+                                <p class="mm-offers-title">Coupons &amp; Offers</p>
+                                <p class="mm-offers-sub">Choose one below</p>
+                            </div>
+                        </div>
+
+                        <div class="mm-offers-list" id="offersList">
+                            <label class="mm-offer-row <?= $appliedDiscountType === '' ? 'selected' : '' ?>" data-code="">
+                                <input type="radio" name="mm_offer_pick" value="" <?= $appliedDiscountType === '' ? 'checked' : '' ?>>
+                                <div class="mm-offer-info">
+                                    <p class="mm-offer-name">No coupon / offer</p>
+                                    <span class="mm-offer-code">
+                                        <span class="lbl">FULL PRICE</span>
+                                    </span>
+                                </div>
+                                <div class="mm-offer-label">₹0 OFF</div>
+                            </label>
+
+                            <?php if (empty($availableOffers)): ?>
+                                <div class="mm-offer-empty">No coupons or offers available right now.</div>
+                            <?php else: ?>
+                                <?php foreach ($availableOffers as $off): ?>
+                                    <?php
+                                    $isSelected = ($appliedDiscountType !== '' && $appliedDiscountCode === $off['code']);
+                                    $isTime     = ($off['type'] ?? '') === 'time';
+                                    $codeLabel  = $isTime ? 'OFFER CODE:' : 'COUPON CODE:';
+                                    ?>
+                                    <label class="mm-offer-row <?= $isSelected ? 'selected' : '' ?>" data-code="<?= htmlspecialchars($off['code']) ?>">
+                                        <input type="radio" name="mm_offer_pick" value="<?= htmlspecialchars($off['code']) ?>" <?= $isSelected ? 'checked' : '' ?>>
+                                        <div class="mm-offer-info">
+                                            <p class="mm-offer-name"><?= htmlspecialchars($off['name']) ?></p>
+                                            <span class="mm-offer-code">
+                                                <span class="lbl"><?= $codeLabel ?></span>
+                                                <span class="val"><?= htmlspecialchars($off['code']) ?></span>
+                                            </span>
+                                        </div>
+                                        <div class="mm-offer-label"><?= htmlspecialchars($off['label']) ?></div>
+                                    </label>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+
+                        <button type="button" class="mm-offer-apply-btn" id="offerApplyBtn">Apply Selection</button>
+                        <div class="mm-offer-msg" id="offerMsg"></div>
+
+                        <div class="mm-offer-manual">
+                            <input type="text" id="offerManualInput" placeholder="OR ENTER CODE" maxlength="50" autocomplete="off" spellcheck="false">
+                            <button type="button" id="offerManualApply">Apply</button>
+                        </div>
+                    </div>
+
                     <div class="mm-co-totals">
                         <div class="mm-co-row">
                             <span>Subtotal</span>
@@ -1482,24 +1557,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                         </div>
                     </div>
 
-                    <!-- COUPON BUTTON (clickable) -->
-                    <div class="mm-coupon-trigger" id="couponTrigger">
-                        <div class="mm-coupon-trigger-left">
-                            <div class="mm-coupon-icon"><i class="bi bi-ticket-perforated-fill"></i></div>
-                            <div>
-                                <?php if ($couponCode !== ''): ?>
-                                    <div class="mm-coupon-title">Coupon <span class="mm-coupon-applied-code"><?= htmlspecialchars($couponCode) ?></span> applied!</div>
-                                    <div class="mm-coupon-sub">Tap to change or remove</div>
-                                <?php else: ?>
-                                    <div class="mm-coupon-title">Apply Coupon</div>
-                                    <div class="mm-coupon-sub">Save more with available offers</div>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                        <i class="bi bi-chevron-right" style="color:#b51f2c;font-size:14px;"></i>
-                    </div>
-
-                    <!-- LOYALTY BANNER -->
                     <?php if (!empty($loyaltyDiscount) && $loyaltyAmount > 0): ?>
                         <div class="mm-loyalty-box">
                             <div class="mm-loyalty-icon"><i class="bi bi-gem"></i></div>
@@ -1518,7 +1575,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                         </div>
                     <?php endif; ?>
 
-                    <!-- WALLET BOX (Always visible if logged in) -->
                     <?php if ($customerLoggedIn && $customerWalletBalance > 0): ?>
                         <div class="mm-wallet-box" id="walletBox">
                             <div class="left">
@@ -1561,29 +1617,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
 
     <?php include_once './includes/footer.php'; ?>
 
-    <!-- ================= COUPON DRAWER MODAL ================= -->
-    <div class="mm-coupon-drawer-overlay" id="couponOverlay">
-        <div class="mm-coupon-drawer" id="couponDrawer">
-            <div class="mm-coupon-drawer-head">
-                <div>
-                    <h3>Available Coupons</h3>
-                    <p>Apply a code to save on this order</p>
-                </div>
-                <button type="button" class="mm-coupon-drawer-close" id="couponClose"><i class="bi bi-x-lg"></i></button>
-            </div>
-
-            <div class="mm-coupon-manual">
-                <input type="text" id="couponInput" class="mm-coupon-manual-input" placeholder="ENTER CODE" maxlength="50" autocomplete="off" spellcheck="false">
-                <button type="button" id="couponApplyBtn" class="mm-coupon-manual-btn">Apply</button>
-            </div>
-            <div class="mm-coupon-msg" id="couponMsg"></div>
-
-            <div class="mm-coupon-list" id="couponList">
-                <div class="mm-coupon-loading"><i class="bi bi-hourglass-split"></i> Loading coupons...</div>
-            </div>
-        </div>
-    </div>
-
     <script>
         window.MAIN_URL = "<?= MAIN_URL ?>";
         window.ADMIN_URL = "<?= ADMIN_URL ?>";
@@ -1594,7 +1627,8 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
         window.DISCOUNT_LABEL = "<?= htmlspecialchars($displayDiscountLabel) ?>";
         window.DISCOUNT_ACTIVE = <?= $discountAmountRound > 0 ? 'true' : 'false' ?>;
         window.RAZORPAY_KEY_ID = "<?= htmlspecialchars($razorpayKeyId) ?>";
-        window.COUPON_CODE = "<?= htmlspecialchars($couponCode) ?>";
+        window.APPLIED_DISCOUNT_TYPE = "<?= htmlspecialchars($appliedDiscountType) ?>";
+        window.APPLIED_DISCOUNT_CODE = "<?= htmlspecialchars($appliedDiscountCode) ?>";
 
         window.CUSTOMER_NAME = "<?= htmlspecialchars($customerName, ENT_QUOTES) ?>";
         window.CUSTOMER_MOBILE = "<?= htmlspecialchars($customerMobile, ENT_QUOTES) ?>";
@@ -1627,151 +1661,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
 
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script src="<?= MAIN_URL ?>js/checkout.js"></script>
-
-    <!-- Coupon Drawer Logic -->
-    <script>
-        (function() {
-            const trigger = document.getElementById('couponTrigger');
-            const overlay = document.getElementById('couponOverlay');
-            const closeBtn = document.getElementById('couponClose');
-            const couponList = document.getElementById('couponList');
-            const couponInput = document.getElementById('couponInput');
-            const applyBtn = document.getElementById('couponApplyBtn');
-            const couponMsg = document.getElementById('couponMsg');
-
-            function showMsg(msg, type) {
-                if (!couponMsg) return;
-                couponMsg.textContent = msg;
-                couponMsg.className = 'mm-coupon-msg ' + (type || '');
-            }
-
-            function openDrawer() {
-                overlay.classList.add('show');
-                document.body.style.overflow = 'hidden';
-                loadCoupons();
-            }
-
-            function closeDrawer() {
-                overlay.classList.remove('show');
-                document.body.style.overflow = '';
-            }
-
-            if (trigger) trigger.addEventListener('click', openDrawer);
-            if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
-            overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) closeDrawer();
-            });
-
-            // Load coupons
-            function loadCoupons() {
-                couponList.innerHTML = '<div class="mm-coupon-loading"><i class="bi bi-hourglass-split"></i> Loading...</div>';
-                fetch('<?= MAIN_URL ?>ajax/apply-coupon.php', {
-                        credentials: 'same-origin'
-                    })
-                    .then(r => r.json())
-                    .then(res => {
-                        if (!res.success || !res.data || !res.data.length) {
-                            couponList.innerHTML = '<div class="mm-coupon-loading">No coupons available right now.</div>';
-                            return;
-                        }
-                        const applied = "<?= htmlspecialchars($couponCode) ?>";
-                        couponList.innerHTML = res.data.map(c => `
-                        <div class="mm-coupon-card" data-code="${c.code}">
-                            <div class="mm-coupon-card-icon"><i class="bi bi-ticket-perforated-fill"></i></div>
-                            <div class="mm-coupon-card-info">
-                                <p class="mm-coupon-card-title">${c.name} — ${c.label}</p>
-                                <span class="mm-coupon-card-code">${c.code}</span>
-                            </div>
-                            ${applied === c.code 
-                                ? `<button type="button" class="mm-coupon-card-remove" data-code="${c.code}">Remove</button>`
-                                : `<button type="button" class="mm-coupon-card-apply" data-code="${c.code}">Apply</button>`
-                            }
-                        </div>
-                    `).join('');
-
-                        // Bind apply buttons
-                        couponList.querySelectorAll('.mm-coupon-card-apply').forEach(btn => {
-                            btn.addEventListener('click', function(e) {
-                                e.stopPropagation();
-                                applyCoupon(this.dataset.code);
-                            });
-                        });
-
-                        // Bind remove buttons
-                        couponList.querySelectorAll('.mm-coupon-card-remove').forEach(btn => {
-                            btn.addEventListener('click', function(e) {
-                                e.stopPropagation();
-                                removeCoupon();
-                            });
-                        });
-                    })
-                    .catch(() => {
-                        couponList.innerHTML = '<div class="mm-coupon-loading">Unable to load coupons.</div>';
-                    });
-            }
-
-            function applyCoupon(code) {
-                applyBtn.disabled = true;
-                showMsg('Applying...', '');
-
-                fetch('<?= MAIN_URL ?>ajax/apply-coupon.php', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded'
-                        },
-                        credentials: 'same-origin',
-                        body: 'code=' + encodeURIComponent(code)
-                    })
-                    .then(r => r.json())
-                    .then(res => {
-                        applyBtn.disabled = false;
-                        if (res.success) {
-                            showMsg(res.message, 'success');
-                            setTimeout(() => window.location.reload(), 500);
-                        } else {
-                            showMsg(res.message || 'Invalid coupon.', 'error');
-                        }
-                    })
-                    .catch(() => {
-                        applyBtn.disabled = false;
-                        showMsg('Unable to connect.', 'error');
-                    });
-            }
-
-            function removeCoupon() {
-                fetch('<?= MAIN_URL ?>ajax/apply-coupon.php', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded'
-                        },
-                        credentials: 'same-origin',
-                        body: 'remove=1'
-                    })
-                    .then(r => r.json())
-                    .then(() => window.location.reload())
-                    .catch(() => window.location.reload());
-            }
-
-            if (applyBtn) {
-                applyBtn.addEventListener('click', function() {
-                    const code = (couponInput.value || '').trim().toUpperCase();
-                    if (!code) {
-                        showMsg('Please enter a coupon code.', 'error');
-                        return;
-                    }
-                    applyCoupon(code);
-                });
-            }
-            if (couponInput) {
-                couponInput.addEventListener('keypress', function(e) {
-                    if (e.key === 'Enter') {
-                        e.preventDefault();
-                        applyBtn.click();
-                    }
-                });
-            }
-        })();
-    </script>
 
 </body>
 

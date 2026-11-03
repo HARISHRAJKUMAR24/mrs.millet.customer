@@ -47,7 +47,7 @@
                     </div>
                 </div>
 
-                <!-- PASSWORD FIELD -->
+                <!-- PASSWORD -->
                 <div class="cust-field" id="regPasswordField">
                     <label>Create Password</label>
                     <div class="cust-input-wrap">
@@ -70,6 +70,7 @@
                     </div>
                 </div>
 
+
                 <!-- ADDRESS TYPE TOGGLE -->
                 <div class="cust-field">
                     <label>Address Type</label>
@@ -85,7 +86,6 @@
 
                 <!-- ================= APARTMENT MODE ================= -->
                 <div id="regApartmentBlock">
-
                     <div class="cust-field" style="position:relative;">
                         <label>Apartment / Community</label>
                         <div class="cust-input-wrap">
@@ -145,12 +145,10 @@
                         <div id="regDoorNoList" class="reg-dropdown" style="display:none;"></div>
                         <p class="mm-co-hint" id="regVariantHint"></p>
                     </div>
-
                 </div><!-- /#regApartmentBlock -->
 
                 <!-- ================= INDIVIDUAL HOUSE MODE ================= -->
                 <div id="regHouseBlock" style="display:none;">
-
                     <div class="cust-field">
                         <label>Full Address <span style="color:#b51f2c;">*</span></label>
                         <div class="cust-input-wrap">
@@ -199,9 +197,23 @@
                         </div>
                         <p class="mm-co-hint">Helps our delivery partner find you faster.</p>
                     </div>
-
                 </div><!-- /#regHouseBlock -->
-
+                <!-- ============ REFERRAL (optional) ============ -->
+                <div class="cust-field">
+                    <label>Referred by <span style="font-size:10.5px;color:#948c82;font-weight:600;text-transform:none;letter-spacing:0;">(optional)</span></label>
+                    <div class="cust-input-wrap">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="9" cy="8" r="4" />
+                            <path d="M2 21c0-4 3-6 7-6" />
+                            <path d="M17 8a3 3 0 1 1 0 6 3 3 0 0 1 0-6z" />
+                            <path d="M14 21c0-3 2.5-5 6-5" />
+                        </svg>
+                        <input type="text" class="cust-input" id="regReferrer"
+                            placeholder="Name or mobile of the person who referred you"
+                            maxlength="150" autocomplete="off">
+                    </div>
+                    <p class="mm-co-hint">Leave blank if no one referred you.</p>
+                </div>
                 <button type="submit" class="cust-btn" id="registerBtn">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M20 6L9 17l-5-5" />
@@ -394,4 +406,49 @@
         height: 180px;
         object-fit: cover;
     }
+
+    /* ============ Inline popup inside register modal ============ */
+    .reg-inline-popup {
+        display: none;
+        margin: 0 0 14px;
+        padding: 12px 14px;
+        border-radius: 10px;
+        font-size: 12.5px;
+        font-weight: 700;
+        line-height: 1.45;
+        border: 1.5px solid transparent;
+        animation: regPopIn .2s ease;
+    }
+
+    .reg-inline-popup.show {
+        display: block;
+    }
+
+    .reg-inline-popup.success {
+        background: #e8f6ea;
+        border-color: #a5d6a7;
+        color: #1b5e20;
+    }
+
+    .reg-inline-popup.error {
+        background: #fdeaea;
+        border-color: #f5b5b5;
+        color: #b71c1c;
+    }
+
+    @keyframes regPopIn {
+        from {
+            opacity: 0;
+            transform: translateY(-4px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    /* Force SweetAlert to sit above all popups */
+.swal-high-z-index {
+    z-index: 99999 !important;
+}
 </style>
