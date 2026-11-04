@@ -14,7 +14,7 @@ $favicon  = !empty($settings['favicon_image']) ? ADMIN_URL . $settings['favicon_
 $customerLoggedIn = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0;
 
 if (!$customerLoggedIn) {
-    header('Location: ' . MAIN_URL . 'login.php?redirect=my-orders.php');
+    header('Location: ' . MAIN_URL . 'index.php');
     exit;
 }
 

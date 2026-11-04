@@ -8,13 +8,14 @@ $siteName = $settings['username'] ?? 'Mrs Mill@';
 $logoUrl  = !empty($settings['logo_image'])    ? ADMIN_URL . $settings['logo_image']    : '';
 $favicon  = !empty($settings['favicon_image']) ? ADMIN_URL . $settings['favicon_image'] : '';
 
+
 /* =========================================================
    AUTH
    ========================================================= */
 $customerLoggedIn = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0;
 
 if (!$customerLoggedIn) {
-    header('Location: ' . MAIN_URL . 'login.php?redirect=profile.php');
+    header('Location: ' . MAIN_URL . 'index.php');
     exit;
 }
 
