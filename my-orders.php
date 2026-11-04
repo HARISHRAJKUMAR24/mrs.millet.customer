@@ -18,11 +18,10 @@ if (!$customerLoggedIn) {
     exit;
 }
 
-$customerRowId = (int)$_SESSION['customer_id'];         // customers.id (int)
+$customerRowId = (int)$_SESSION['customer_id'];
 $customerName  = $_SESSION['customer_name']   ?? '';
 $customerMobile = $_SESSION['customer_mobile'] ?? '';
 
-/* Fetch customer_code (MRSMCxxxxx) — that's what `orders.customer_id` stores */
 $customerCode = (string)($_SESSION['customer_code'] ?? '');
 if ($customerCode === '') {
     try {
@@ -52,7 +51,7 @@ if ($filter !== 'all') {
 }
 
 /* =========================================================
-   LOAD ORDERS — filtered by orders.customer_id = MRSMCxxxxx
+   LOAD ORDERS
    ========================================================= */
 $orders      = [];
 $totalOrders = 0;
@@ -95,7 +94,6 @@ try {
     $orders = [];
 }
 
-/* Decode address_json for each order once */
 foreach ($orders as &$o) {
     $addr = [];
     if (!empty($o['address_json'])) {
@@ -414,6 +412,32 @@ if ($customerRowId > 0) {
             flex-wrap: wrap;
         }
 
+        /* Cancel Button */
+        .mo-cancel-btn {
+            background: #fff;
+            border: 1.5px solid #f1c8cc;
+            color: #b51f2c;
+            font-family: "DM Sans", sans-serif;
+            font-size: 11px;
+            font-weight: 800;
+            padding: 4px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .mo-cancel-btn:hover {
+            background: #fbe8e9;
+        }
+
+        .mo-cancel-btn:disabled {
+            opacity: 0.5;
+            cursor: wait;
+        }
+
         .mo-status {
             display: inline-flex;
             align-items: center;
@@ -575,7 +599,6 @@ if ($customerRowId > 0) {
             font-size: 13px;
         }
 
-        /* Individual-house address badge */
         .mo-ih-badge {
             display: inline-flex;
             align-items: center;
@@ -768,6 +791,182 @@ if ($customerRowId > 0) {
             pointer-events: none;
         }
 
+        /* Toast */
+        .mm-toast {
+            position: fixed;
+            top: 84px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-10px);
+            padding: 10px 18px;
+            border-radius: 999px;
+            font-size: 12.5px;
+            font-weight: 700;
+            color: #fff;
+            background: #1f7a3d;
+            box-shadow: 0 10px 26px rgba(0, 0, 0, 0.18);
+            z-index: 9999;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.25s ease, transform 0.25s ease;
+        }
+
+        .mm-toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .mm-toast.error {
+            background: #b51f2c;
+        }
+
+        /* Modal CSS */
+        .mm-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(30, 25, 22, .55);
+            backdrop-filter: blur(3px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 99999;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity .2s ease, visibility .2s ease;
+        }
+
+        .mm-modal-overlay.show {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .mm-modal {
+            background: #fff;
+            border-radius: 20px;
+            padding: 30px 26px 24px;
+            max-width: 400px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 30px 80px rgba(0, 0, 0, .25);
+            transform: translateY(15px) scale(.96);
+            transition: transform .25s cubic-bezier(.2, .9, .3, 1.2);
+        }
+
+        .mm-modal-overlay.show .mm-modal {
+            transform: translateY(0) scale(1);
+        }
+
+        .mm-modal-icon-error {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: #fdecec;
+            color: #b51f2c;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            margin: 0 auto 16px;
+            animation: popIn .35s cubic-bezier(.2, .9, .3, 1.4);
+        }
+
+        .mm-modal-icon-success {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: #e8f6ea;
+            color: #2e7d32;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            margin: 0 auto 16px;
+            animation: popIn .35s cubic-bezier(.2, .9, .3, 1.4);
+        }
+
+        @keyframes popIn {
+            0% {
+                transform: scale(.5);
+                opacity: 0;
+            }
+
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        .mm-modal-title {
+            margin: 0 0 10px;
+            font-family: "Playfair Display", serif;
+            font-size: 20px;
+            font-weight: 700;
+            color: #302923;
+        }
+
+        .mm-modal-text {
+            margin: 0 0 24px;
+            font-size: 12.5px;
+            color: #6f675f;
+            line-height: 1.6;
+        }
+
+        .mm-modal-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .mm-btn {
+            flex: 1;
+            height: 44px;
+            border-radius: 11px;
+            border: none;
+            font-family: "DM Sans", sans-serif;
+            font-size: 12.5px;
+            font-weight: 800;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            text-decoration: none;
+            transition: .2s ease;
+        }
+
+        .mm-btn-ghost {
+            background: #faf7f0;
+            color: #6f675f;
+        }
+
+        .mm-btn-ghost:hover {
+            background: #f0ebe4;
+            color: #302923;
+        }
+
+        .mm-btn-danger {
+            background: #b51f2c;
+            color: #fff;
+            box-shadow: 0 6px 16px rgba(181, 31, 44, .22);
+        }
+
+        .mm-btn-danger:hover {
+            background: #8e1722;
+            color: #fff;
+            transform: translateY(-1px);
+        }
+
+        .mm-btn-primary {
+            background: #1f7a3d;
+            color: #fff;
+            box-shadow: 0 6px 16px rgba(31, 122, 61, 0.22);
+        }
+
+        .mm-btn-primary:hover {
+            background: #155c2c;
+            color: #fff;
+            transform: translateY(-1px);
+        }
+
         @media (max-width: 640px) {
             .mo-head h1 {
                 font-size: 24px;
@@ -823,28 +1022,23 @@ if ($customerRowId > 0) {
 
                 <div class="mo-tabs">
                     <a href="?filter=all" class="mo-tab <?= $filter === 'all' ? 'active' : '' ?>">
-                        <i class="bi bi-grid-3x3-gap-fill"></i>
-                        All
+                        <i class="bi bi-grid-3x3-gap-fill"></i> All
                         <span class="count"><?= (int)$filterCounts['all'] ?></span>
                     </a>
                     <a href="?filter=pending" class="mo-tab <?= $filter === 'pending' ? 'active' : '' ?>">
-                        <i class="bi bi-clock-fill"></i>
-                        Pending
+                        <i class="bi bi-clock-fill"></i> Pending
                         <span class="count"><?= (int)$filterCounts['pending'] ?></span>
                     </a>
                     <a href="?filter=confirmed" class="mo-tab <?= $filter === 'confirmed' ? 'active' : '' ?>">
-                        <i class="bi bi-check-circle-fill"></i>
-                        Confirmed
+                        <i class="bi bi-check-circle-fill"></i> Confirmed
                         <span class="count"><?= (int)$filterCounts['confirmed'] ?></span>
                     </a>
                     <a href="?filter=delivered" class="mo-tab <?= $filter === 'delivered' ? 'active' : '' ?>">
-                        <i class="bi bi-box-seam-fill"></i>
-                        Delivered
+                        <i class="bi bi-box-seam-fill"></i> Delivered
                         <span class="count"><?= (int)$filterCounts['delivered'] ?></span>
                     </a>
                     <a href="?filter=cancelled" class="mo-tab <?= $filter === 'cancelled' ? 'active' : '' ?>">
-                        <i class="bi bi-x-circle-fill"></i>
-                        Cancelled
+                        <i class="bi bi-x-circle-fill"></i> Cancelled
                         <span class="count"><?= (int)$filterCounts['cancelled'] ?></span>
                     </a>
                 </div>
@@ -883,8 +1077,11 @@ if ($customerRowId > 0) {
                             $addr        = $o['_addr'] ?? [];
                             $boyName     = trim($o['delivery_boy_name'] ?? '');
                             $boyCode     = trim($o['delivery_boy_code'] ?? '');
+
+                            // Check if order can be cancelled (Must be pending)
+                            $isPending = ($o['status'] === 'pending');
                         ?>
-                            <div class="mo-order">
+                            <div class="mo-order" id="order-card-<?= $o['id'] ?>">
 
                                 <div class="mo-order-head">
                                     <div class="mo-order-head-left">
@@ -896,6 +1093,12 @@ if ($customerRowId > 0) {
                                     </div>
 
                                     <div class="mo-order-head-right">
+                                        <?php if ($isPending): ?>
+                                            <button type="button" class="mo-cancel-btn" data-id="<?= $o['id'] ?>">
+                                                <i class="bi bi-x-circle"></i> Cancel Order
+                                            </button>
+                                        <?php endif; ?>
+
                                         <span class="mo-status <?= $status['class'] ?>">
                                             <i class="bi <?= $status['icon'] ?>"></i>
                                             <?= $status['label'] ?>
@@ -957,8 +1160,7 @@ if ($customerRowId > 0) {
                                                 <?= htmlspecialchars($addr['full_address'] ?? '—') ?>
                                             </span>
                                             <span class="mo-ih-badge">
-                                                <i class="bi bi-house-door-fill"></i>
-                                                Individual House
+                                                <i class="bi bi-house-door-fill"></i> Individual House
                                             </span>
                                         <?php else: ?>
                                             <span>
@@ -1052,17 +1254,158 @@ if ($customerRowId > 0) {
         </div>
     </main>
 
+    <!-- CANCEL ORDER MODAL -->
+    <div class="mm-modal-overlay" id="cancelOverlay" aria-hidden="true">
+        <div class="mm-modal" role="dialog" aria-modal="true">
+            <div class="mm-modal-icon-error">
+                <i class="bi bi-x-circle"></i>
+            </div>
+            <h3 class="mm-modal-title">Cancel Order?</h3>
+            <p class="mm-modal-text">
+                Are you sure you want to cancel this order?<br><br>
+                <span style="background:#fdfaf4; color:#6f5a3f; padding:8px 12px; border-radius:8px; font-weight:600; font-size:11.5px; display:inline-block; text-align:left; line-height:1.5;">
+                    <b>Refund Policy:</b><br>
+                    • Within 1 hour: <b style="color:#1f7a3d;">100% Refund</b><br>
+                    • After 1 hour: <b style="color:#b51f2c;">90% Refund</b> <span style="font-size:10px;">(10% fee)</span>
+                </span>
+            </p>
+            <div class="mm-modal-actions">
+                <button type="button" class="mm-btn mm-btn-ghost" id="cancelNoBtn">
+                    Keep Order
+                </button>
+                <button type="button" class="mm-btn mm-btn-danger" id="cancelYesBtn">
+                    Yes, Cancel Order
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SUCCESS MODAL -->
+    <div class="mm-modal-overlay" id="successOverlay" aria-hidden="true">
+        <div class="mm-modal" role="dialog" aria-modal="true">
+            <div class="mm-modal-icon-success">
+                <i class="bi bi-check-lg"></i>
+            </div>
+            <h3 class="mm-modal-title">Order Cancelled</h3>
+            <p class="mm-modal-text" id="successMessage">
+                Your order has been cancelled successfully.
+            </p>
+            <div class="mm-modal-actions">
+                <button type="button" class="mm-btn mm-btn-primary" id="successOkBtn">
+                    OK
+                </button>
+            </div>
+        </div>
+    </div>
 
     <?php include_once './includes/mobile-nav-bar.php'; ?>
     <?php include_once './includes/login-poup.php'; ?>
     <?php include_once './includes/register-poup.php'; ?>
 
-    <div id="mmToast"></div>
+    <div id="mmToast" class="mm-toast"></div>
     <?php include_once './includes/footer.php'; ?>
+
     <script>
         window.MAIN_URL = "<?= MAIN_URL ?>";
         window.ADMIN_URL = "<?= ADMIN_URL ?>";
         window.IS_LOGGED_IN = <?= $customerLoggedIn ? 'true' : 'false' ?>;
+
+        // Cancel Order Logic
+        document.addEventListener("DOMContentLoaded", function() {
+            const cancelBtns = document.querySelectorAll(".mo-cancel-btn");
+            const toast = document.getElementById("mmToast");
+            const cancelOverlay = document.getElementById("cancelOverlay");
+            const cancelNoBtn = document.getElementById("cancelNoBtn");
+            const cancelYesBtn = document.getElementById("cancelYesBtn");
+
+            const successOverlay = document.getElementById("successOverlay");
+            const successMessage = document.getElementById("successMessage");
+            const successOkBtn = document.getElementById("successOkBtn");
+
+            let activeOrderId = null;
+            let activeBtn = null;
+
+            function showToast(msg, isError = false) {
+                toast.textContent = msg;
+                toast.className = "mm-toast show" + (isError ? " error" : "");
+                setTimeout(() => {
+                    toast.className = "mm-toast";
+                }, 4000);
+            }
+
+            function closeCancelModal() {
+                cancelOverlay.classList.remove("show");
+                cancelOverlay.setAttribute("aria-hidden", "true");
+                if (activeBtn) {
+                    activeBtn.disabled = false;
+                    activeBtn.innerHTML = '<i class="bi bi-x-circle"></i> Cancel Order';
+                }
+            }
+
+            // Open Modal on Cancel Click
+            cancelBtns.forEach(btn => {
+                btn.addEventListener("click", function() {
+                    activeOrderId = this.dataset.id;
+                    activeBtn = this;
+                    cancelOverlay.classList.add("show");
+                    cancelOverlay.setAttribute("aria-hidden", "false");
+                });
+            });
+
+            // Close Cancel Modal
+            cancelNoBtn.addEventListener("click", closeCancelModal);
+            cancelOverlay.addEventListener("click", function(e) {
+                if (e.target === cancelOverlay) closeCancelModal();
+            });
+
+            // Confirm Cancel
+            cancelYesBtn.addEventListener("click", function() {
+                if (!activeOrderId || !activeBtn) return;
+
+                cancelYesBtn.disabled = true;
+                cancelYesBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Cancelling...';
+
+                // Hide cancel modal instantly to show processing
+                cancelOverlay.classList.remove("show");
+
+                activeBtn.disabled = true;
+                activeBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Cancelling...';
+
+                const fd = new FormData();
+                fd.append("order_id", activeOrderId);
+
+                fetch(window.MAIN_URL + "ajax/cancel-order.php", {
+                        method: "POST",
+                        body: fd
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        cancelYesBtn.disabled = false;
+                        cancelYesBtn.innerHTML = 'Yes, Cancel Order';
+
+                        if (data.success) {
+                            // Show success popup
+                            successMessage.innerHTML = data.message;
+                            successOverlay.classList.add("show");
+                            successOverlay.setAttribute("aria-hidden", "false");
+                        } else {
+                            showToast(data.message || "Failed to cancel order.", true);
+                            closeCancelModal();
+                        }
+                    })
+                    .catch(() => {
+                        cancelYesBtn.disabled = false;
+                        cancelYesBtn.innerHTML = 'Yes, Cancel Order';
+                        showToast("Network error. Please try again.", true);
+                        closeCancelModal();
+                    });
+            });
+
+            // Handle Success Modal OK
+            successOkBtn.addEventListener("click", function() {
+                window.location.reload();
+            });
+        });
     </script>
 
     <script src="<?= MAIN_URL ?>js/home.js"></script>
