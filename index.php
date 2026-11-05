@@ -9,8 +9,27 @@ $logoUrl  = !empty($settings['logo_image'])    ? ADMIN_URL . $settings['logo_ima
 $favicon  = !empty($settings['favicon_image']) ? ADMIN_URL . $settings['favicon_image'] : '';
 
 /* ---------- ALL ACTIVE MENUS ---------- */
+/* ---------- ACTIVE MENUS: HIDE EXPIRED MENUS ---------- */
 $activeMenus = getActiveMenus($pdo);
 
+$currentTime = time();
+
+$activeMenus = array_values(array_filter($activeMenus, function ($menu) use ($currentTime) {
+
+    // Keep menus without an expiry value
+    if (empty($menu['end_at'])) {
+        return true;
+    }
+
+    $expiryTime = strtotime($menu['end_at']);
+
+    // Hide menu if its expiry date/time has passed
+    if ($expiryTime !== false && $expiryTime < $currentTime) {
+        return false;
+    }
+
+    return true;
+}));
 /* =========================================================
    PER-MENU DISCOUNT HELPER
    ========================================================= */

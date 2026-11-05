@@ -2,15 +2,60 @@
 require_once './config/config.php';
 require_once './config/function.php';
 
+// =====================================================
+// TIMEZONE
+// =====================================================
+date_default_timezone_set('Asia/Kolkata');
+
+$timezone = new DateTimeZone('Asia/Kolkata');
+$now = new DateTimeImmutable('now', $timezone);
+
+$todayDate = $now->format('Y-m-d');
+$currentDateTime = $now->format('Y-m-d H:i:s');
+
+// =====================================================
+// SETTINGS
+// =====================================================
 $settings = getSettings($pdo);
 
 $siteName = $settings['username'] ?? 'Mrs Mill@';
-$logoUrl  = !empty($settings['logo_image'])    ? ADMIN_URL . $settings['logo_image']    : '';
-$favicon  = !empty($settings['favicon_image']) ? ADMIN_URL . $settings['favicon_image'] : '';
 
-/* ---------- FETCH ACTIVE MENUS (Get the First = Today) ---------- */
-$activeMenus = getActiveMenus($pdo);
-$todayMenu   = $activeMenus[0] ?? null;
+$logoUrl = !empty($settings['logo_image'])
+    ? ADMIN_URL . $settings['logo_image']
+    : '';
+
+$favicon = !empty($settings['favicon_image'])
+    ? ADMIN_URL . $settings['favicon_image']
+    : '';
+
+// =====================================================
+// FETCH TODAY MENU USING ACTUAL SCHEDULE
+// =====================================================
+$todayMenu = null;
+
+try {
+
+    $stmt = $pdo->prepare("
+        SELECT *
+        FROM menus
+        WHERE status = 1
+          AND start_at <= :current_time
+          AND end_at >= :current_time
+          AND DATE(end_at) = :today_date
+        ORDER BY end_at ASC
+        LIMIT 1
+    ");
+
+    $stmt->execute([
+        ':current_time' => $currentDateTime,
+        ':today_date' => $todayDate
+    ]);
+
+    $todayMenu = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+
+    error_log('Today menu fetch error: ' . $e->getMessage());
+}
 
 if (!$todayMenu) {
     header('Location: index.php');
@@ -19,42 +64,95 @@ if (!$todayMenu) {
 
 $todayMenuCode = $todayMenu['menu_code'];
 
-/* ---------- OFFER IMAGE ---------- */
-$todayOfferImg = !empty($settings['today_offer_image']) ? ADMIN_URL . $settings['today_offer_image'] : '';
+// =====================================================
+// TODAY OFFER IMAGE
+// =====================================================
+$todayOfferImg = !empty($settings['today_offer_image'])
+    ? ADMIN_URL . $settings['today_offer_image']
+    : '';
 
-/* ---------- FETCH PRODUCTS & CATEGORIES ---------- */
-$rawRows    = getMenuProducts($pdo, 500, $todayMenuCode);
-$products   = groupMenuProductsByProduct($rawRows);
+// =====================================================
+// FETCH PRODUCTS & CATEGORIES
+// =====================================================
+$rawRows = getMenuProducts($pdo, 500, $todayMenuCode);
+
+$products = groupMenuProductsByProduct($rawRows);
+
 $categories = getMenuCategories($pdo, 50, $todayMenuCode);
 
-/* ---------- DISCOUNT ---------- */
+// =====================================================
+// DISCOUNT
+// =====================================================
 function getMenuDiscount(PDO $pdo, array $menu): ?array
 {
     try {
-        $menuStart = strtotime($menu['start_at']);
-        $menuEnd   = strtotime($menu['end_at']);
-        $now       = time();
-        if ($now < $menuStart || $now > $menuEnd) return null;
 
-        $dStmt = $pdo->prepare(
-            "SELECT d.discount_code, d.discount_name,
-                    dt.slot_name, dt.start_time, dt.end_time,
-                    dt.amount_type, dt.discount_amount, dt.delivery_enabled
-             FROM discounts d
-             INNER JOIN discount_times dt ON dt.discount_code = d.discount_code
-             WHERE d.status = 1 AND d.discount_type = 'time'
-             ORDER BY dt.id ASC"
+        $timezone = new DateTimeZone('Asia/Kolkata');
+
+        $menuStart = new DateTimeImmutable(
+            $menu['start_at'],
+            $timezone
         );
+
+        $menuEnd = new DateTimeImmutable(
+            $menu['end_at'],
+            $timezone
+        );
+
+        $now = new DateTimeImmutable('now', $timezone);
+
+        if ($now < $menuStart || $now > $menuEnd) {
+            return null;
+        }
+
+        $dStmt = $pdo->prepare("
+            SELECT
+                d.discount_code,
+                d.discount_name,
+                dt.slot_name,
+                dt.start_time,
+                dt.end_time,
+                dt.amount_type,
+                dt.discount_amount,
+                dt.delivery_enabled
+            FROM discounts d
+            INNER JOIN discount_times dt
+                ON dt.discount_code = d.discount_code
+            WHERE d.status = 1
+              AND d.discount_type = 'time'
+            ORDER BY dt.id ASC
+        ");
+
         $dStmt->execute();
+
         $slots = $dStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        $prevEndEpoch = $menuStart;
-        $baseDay      = date('Y-m-d', $menuStart);
+        $prevEndEpoch = $menuStart->getTimestamp();
+
+        $baseDay = $menuStart->format('Y-m-d');
+
+        $nowEpoch = $now->getTimestamp();
 
         foreach ($slots as $s) {
-            $slotEndTs = strtotime($baseDay . ' ' . $s['end_time']);
-            if ($slotEndTs < $prevEndEpoch) $slotEndTs += 86400;
-            if ($now >= $prevEndEpoch && $now <= $slotEndTs) {
+
+            $slotEnd = new DateTimeImmutable(
+                $baseDay . ' ' . $s['end_time'],
+                $timezone
+            );
+
+            $slotEndTs = $slotEnd->getTimestamp();
+
+            // Overnight slot support
+            if ($slotEndTs < $prevEndEpoch) {
+                $slotEndTs += 86400;
+            }
+
+            if (
+                $nowEpoch >= $prevEndEpoch &&
+                $nowEpoch <= $slotEndTs &&
+                $nowEpoch <= $menuEnd->getTimestamp()
+            ) {
+
                 return [
                     'name'        => $s['discount_name'],
                     'slot_name'   => $s['slot_name'],
@@ -63,50 +161,83 @@ function getMenuDiscount(PDO $pdo, array $menu): ?array
                     'delivery'    => (int)$s['delivery_enabled'],
                 ];
             }
+
             $prevEndEpoch = $slotEndTs;
         }
-    } catch (PDOException $e) {
+    } catch (Throwable $e) {
+
+        error_log('Today discount error: ' . $e->getMessage());
     }
+
     return null;
 }
 
 $menuDiscount = getMenuDiscount($pdo, $todayMenu);
+
 $badgeText = '';
+
 if ($menuDiscount && $menuDiscount['amount'] > 0) {
+
     $badgeText = $menuDiscount['amount_type'] === 'percent'
         ? number_format($menuDiscount['amount'], 0) . '% OFF'
         : '₹' . number_format($menuDiscount['amount'], 0) . ' OFF';
 }
 
-/* ---------- CUSTOMER & CART ---------- */
-$customerLoggedIn = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0;
-$customerRowId    = $customerLoggedIn ? (int)$_SESSION['customer_id'] : 0;
-$customerCode     = $_SESSION['customer_code']   ?? '';
-$customerName     = $_SESSION['customer_name']   ?? '';
-$customerMobile   = $_SESSION['customer_mobile'] ?? '';
+// =====================================================
+// CUSTOMER & CART
+// =====================================================
+$customerLoggedIn = isset($_SESSION['customer_id'])
+    && (int)$_SESSION['customer_id'] > 0;
+
+$customerRowId = $customerLoggedIn
+    ? (int)$_SESSION['customer_id']
+    : 0;
+
+$customerCode = $_SESSION['customer_code'] ?? '';
+$customerName = $_SESSION['customer_name'] ?? '';
+$customerMobile = $_SESSION['customer_mobile'] ?? '';
 
 $cartCount = 0;
 $cartTotal = 0.0;
 
 if ($customerRowId > 0) {
+
     try {
-        $stmt = $pdo->prepare("SELECT COALESCE(SUM(qty),0) AS c, COALESCE(SUM(price * qty),0) AS t FROM customer_cart WHERE customer_id = ?");
+
+        $stmt = $pdo->prepare("
+            SELECT
+                COALESCE(SUM(qty), 0) AS c,
+                COALESCE(SUM(price * qty), 0) AS t
+            FROM customer_cart
+            WHERE customer_id = ?
+        ");
+
         $stmt->execute([$customerRowId]);
+
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
         $cartCount = (int)($row['c'] ?? 0);
         $cartTotal = (float)($row['t'] ?? 0);
     } catch (PDOException $e) {
+
+        error_log('Cart fetch error: ' . $e->getMessage());
     }
 } else {
+
     if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
+
         foreach ($_SESSION['cart'] as $c) {
+
             $q = (int)($c['qty'] ?? 0);
+
             $cartCount += $q;
+
             $cartTotal += ((float)($c['price'] ?? 0)) * $q;
         }
     }
 }
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 

@@ -1,75 +1,176 @@
 <?php
-$todayOfferImg    = !empty($settings['today_offer_image'])    ? ADMIN_URL . $settings['today_offer_image']    : '';
-$tomorrowOfferImg = !empty($settings['tomorrow_offer_image']) ? ADMIN_URL . $settings['tomorrow_offer_image'] : '';
-/* ---------- OFFER CARD EXPIRY FLAGS ---------- */
-$todayMenuExpired    = true;
-$tomorrowMenuExpired = true;
 
-foreach ($activeMenus as $i => $m) {
-    $endTs = strtotime($m['end_at'] ?? '');
-    if (!$endTs) continue;
+$menuTimezone = new DateTimeZone('Asia/Kolkata');
+$menuNow = new DateTimeImmutable('now', $menuTimezone);
 
-    // index 0 = today, index 1 = tomorrow (matches your panel labels)
-    if ($i === 0 && time() <= $endTs) $todayMenuExpired    = false;
-    if ($i === 1 && time() <= $endTs) $tomorrowMenuExpired = false;
+$todayDate = $menuNow->format('Y-m-d');
+$tomorrowDate = $menuNow->modify('+1 day')->format('Y-m-d');
+
+$todayMenuAvailable = false;
+$tomorrowMenuAvailable = false;
+
+$todayOfferImg = !empty($settings['today_offer_image'])
+    ? ADMIN_URL . $settings['today_offer_image']
+    : '';
+
+$tomorrowOfferImg = !empty($settings['tomorrow_offer_image'])
+    ? ADMIN_URL . $settings['tomorrow_offer_image']
+    : '';
+
+try {
+
+    $stmt = $pdo->query("
+        SELECT menu_code, menu_name, start_at, end_at
+        FROM menus
+        WHERE status = 1
+        ORDER BY start_at ASC
+    ");
+
+    $scheduledMenus = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($scheduledMenus as $menu) {
+
+        if (empty($menu['start_at']) || empty($menu['end_at'])) {
+            continue;
+        }
+
+        $start = new DateTimeImmutable(
+            $menu['start_at'],
+            $menuTimezone
+        );
+
+        $end = new DateTimeImmutable(
+            $menu['end_at'],
+            $menuTimezone
+        );
+
+        // Ignore menus which have not started or have expired.
+        if ($menuNow < $start || $menuNow > $end) {
+            continue;
+        }
+
+        $endDate = $end->format('Y-m-d');
+
+        // Menu ending today = Today's Menu
+        if ($endDate === $todayDate) {
+            $todayMenuAvailable = true;
+        }
+
+        // Menu ending tomorrow = Tomorrow's Menu
+        if ($endDate === $tomorrowDate) {
+            $tomorrowMenuAvailable = true;
+        }
+    }
+} catch (Throwable $e) {
+
+    error_log('Menu schedule error: ' . $e->getMessage());
+
+    $todayMenuAvailable = false;
+    $tomorrowMenuAvailable = false;
 }
+
 ?>
+
+
 <?php if ($todayOfferImg || $tomorrowOfferImg): ?>
+
     <!-- ================= OFFER CARDS ================= -->
+
     <section class="mm-offers">
+
         <div class="mm-container">
+
             <div class="mm-offers-grid">
 
                 <!-- LEFT = TOMORROW OFFER -->
+
                 <div class="mm-offer-card mm-offer-tomorrow">
+
                     <?php if ($tomorrowOfferImg): ?>
-                        <img src="<?= htmlspecialchars($tomorrowOfferImg) ?>" alt="Tomorrow Offer">
+
+                        <img
+                            src="<?= htmlspecialchars($tomorrowOfferImg, ENT_QUOTES, 'UTF-8') ?>"
+                            alt="Tomorrow Offer">
+
                     <?php else: ?>
+
                         <div class="mm-offer-placeholder">
                             <i class="bi bi-sunrise"></i>
                         </div>
+
                     <?php endif; ?>
 
-                    <?php if (empty($tomorrowMenuExpired)): ?>
+                    <?php if ($tomorrowMenuAvailable): ?>
+
                         <div class="mm-offer-btn-wrap">
-                            <a href="tomorrow-menu.php" class="mm-offer-btn mm-offer-btn-tomorrow">
+
+                            <a href="tomorrow-menu.php"
+                                class="mm-offer-btn mm-offer-btn-tomorrow">
+
                                 <i class="bi bi-arrow-right"></i>
                                 <span>View Menu</span>
+
                             </a>
+
                         </div>
+
                     <?php endif; ?>
+
                 </div>
 
+
                 <!-- RIGHT = TODAY OFFER -->
+
                 <div class="mm-offer-card mm-offer-today">
+
                     <?php if ($todayOfferImg): ?>
-                        <img src="<?= htmlspecialchars($todayOfferImg) ?>" alt="Today Offer">
+
+                        <img
+                            src="<?= htmlspecialchars($todayOfferImg, ENT_QUOTES, 'UTF-8') ?>"
+                            alt="Today Offer">
+
                     <?php else: ?>
+
                         <div class="mm-offer-placeholder">
                             <i class="bi bi-fire"></i>
                         </div>
+
                     <?php endif; ?>
 
-                    <?php if (empty($todayMenuExpired)): ?>
+                    <?php if ($todayMenuAvailable): ?>
+
                         <div class="mm-offer-btn-wrap">
-                            <a href="today-menu.php" class="mm-offer-btn mm-offer-btn-today">
+
+                            <a href="today-menu.php"
+                                class="mm-offer-btn mm-offer-btn-today">
+
                                 <i class="bi bi-arrow-right"></i>
                                 <span>View Menu</span>
+
                             </a>
+
                         </div>
+
                     <?php endif; ?>
+
                 </div>
 
             </div>
+
         </div>
+
     </section>
+
+
+    <!-- ================= OFFER CARD STYLES ================= -->
 
     <style>
         .mm-offers {
             padding: 22px 0 0;
         }
 
-        /* ✅ Always 2 columns (side-by-side) */
+        /* Always 2 columns */
+
         .mm-offers-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -80,6 +181,7 @@ foreach ($activeMenus as $i => $m) {
             display: flex;
             flex-direction: column;
             background: transparent;
+            min-width: 0;
         }
 
         .mm-offer-card img {
@@ -106,14 +208,14 @@ foreach ($activeMenus as $i => $m) {
             color: #d5cbbd;
         }
 
-        /* Centered button area */
+        /* Button alignment */
+
         .mm-offer-btn-wrap {
             display: flex;
             justify-content: center;
             margin-top: 12px;
         }
 
-        /* ✅ Removed shadows, kept layout */
         .mm-offer-btn {
             display: inline-flex;
             align-items: center;
@@ -136,44 +238,50 @@ foreach ($activeMenus as $i => $m) {
             filter: brightness(1.06);
         }
 
-        /* TODAY button — red gradient (No shadow) */
+        /* Today — Red */
+
         .mm-offer-btn-today {
-            background: linear-gradient(135deg, #d42a3a 0%, #b51f2c 100%);
+            background: linear-gradient(135deg,
+                    #d42a3a 0%,
+                    #b51f2c 100%);
         }
 
-        /* TOMORROW button — blue gradient (No shadow) */
+        /* Tomorrow — Blue */
+
         .mm-offer-btn-tomorrow {
-            background: linear-gradient(135deg, #3b82f6 0%, #1e40af 100%);
+            background: linear-gradient(135deg,
+                    #3b82f6 0%,
+                    #1e40af 100%);
         }
 
         .mm-offer-btn i {
             font-size: 12px;
         }
 
-        /* ✅ Responsive adjustments (Still side-by-side, text visible) */
+        /* Mobile responsive */
+
         @media (max-width: 640px) {
+
             .mm-offers {
                 padding: 16px 0 0;
             }
 
             .mm-offers-grid {
                 gap: 10px;
-                /* Tighter gap on mobile */
             }
 
-            /* Slightly adjust button size for mobile */
             .mm-offer-btn {
                 padding: 8px 12px;
                 font-size: 10px;
-                /* Smaller text to fit side-by-side */
                 gap: 4px;
             }
 
-            /* Tweak aspect ratio for mobile so they fit nicely side-by-side */
             .mm-offer-card img,
             .mm-offer-placeholder {
                 aspect-ratio: 4 / 3;
             }
+
         }
     </style>
+
 <?php endif; ?>

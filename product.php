@@ -14,7 +14,76 @@ if ($productId <= 0) {
     header('Location: index.php');
     exit;
 }
+// 1. GET PRODUCT ID
+$productId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
+if ($productId <= 0) {
+    header('Location: index.php');
+    exit;
+}
+
+// 2. FETCH PRODUCT FIRST
+$stmt = $pdo->prepare("
+    SELECT p.*, c.category_name, c.category_slug, c.category_image
+    FROM products p
+    LEFT JOIN categories c ON c.id = p.category_id
+    WHERE p.id = ? AND p.status = 1
+    LIMIT 1
+");
+
+$stmt->execute([$productId]);
+$product = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$product) {
+    header('Location: index.php');
+    exit;
+}
+
+// 3. INITIALIZE MENU VARIABLES
+$activeMenus = getActiveMenus($pdo);
+$productMenu = null;
+$menuDiscount = null;
+$badgeText = '';
+
+// 4. DEFINE getMenuDiscount() FUNCTION HERE
+// Keep your existing function exactly once.
+
+// 5. CHECK PRODUCT MENU
+foreach ($activeMenus as $menu) {
+
+    $mStmt = $pdo->prepare("
+        SELECT id
+        FROM menu_products
+        WHERE menu_code = ?
+        AND product_code = ?
+        LIMIT 1
+    ");
+
+    $mStmt->execute([
+        $menu['menu_code'],
+        $product['product_code']
+    ]);
+
+    if ($mStmt->fetch()) {
+
+        $productMenu = $menu;
+        $menuDiscount = getMenuDiscount($pdo, $menu);
+
+        if ($menuDiscount && $menuDiscount['amount'] > 0) {
+            $badgeText = $menuDiscount['amount_type'] === 'percent'
+                ? number_format($menuDiscount['amount'], 0) . '% OFF'
+                : '₹' . number_format($menuDiscount['amount'], 0) . ' OFF';
+        }
+
+        break;
+    }
+}
+
+// 6. REDIRECT IF PRODUCT HAS NO ACTIVE MENU
+if (!$productMenu) {
+    header('Location: index.php');
+    exit;
+}
 /* ---------- FETCH PRODUCT ---------- */
 try {
     $stmt = $pdo->prepare(
@@ -35,6 +104,7 @@ try {
     header('Location: index.php');
     exit;
 }
+
 
 /* ---------- FIND WHICH MENU IT BELONGS TO ---------- */
 $activeMenus = getActiveMenus($pdo);
@@ -538,6 +608,7 @@ if ($customerRowId > 0) {
             text-transform: uppercase;
             display: -webkit-box;
             -webkit-line-clamp: 2;
+            line-clamp: 2;
             -webkit-box-orient: vertical;
             overflow: hidden;
         }

@@ -70,7 +70,6 @@
                     </div>
                 </div>
 
-
                 <!-- ADDRESS TYPE TOGGLE -->
                 <div class="cust-field">
                     <label>Address Type</label>
@@ -103,20 +102,20 @@
                     </div>
 
                     <div class="cust-field" style="position:relative;">
-                        <label>Block <span style="color:#b51f2c;">*</span></label>
+                        <label>Block</label>
                         <div class="cust-input-wrap">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M3 21V8l9-5 9 5v13" />
                                 <path d="M9 21V12h6v9" />
                             </svg>
                             <input type="text" class="cust-input" id="regBlock"
-                                placeholder="Search or type block (e.g. A)" autocomplete="off">
+                                placeholder="Type block (e.g. A)" autocomplete="off">
                         </div>
                         <div id="regBlockList" class="reg-dropdown" style="display:none;"></div>
                     </div>
 
                     <div class="cust-field" style="position:relative;">
-                        <label>Floor <span style="color:#b51f2c;">*</span></label>
+                        <label>Floor</label>
                         <div class="cust-input-wrap">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <rect x="3" y="3" width="7" height="7" rx="1" />
@@ -125,13 +124,13 @@
                                 <rect x="14" y="14" width="7" height="7" rx="1" />
                             </svg>
                             <input type="text" class="cust-input" id="regFloor"
-                                placeholder="Search or type floor (e.g. 1)" autocomplete="off">
+                                placeholder="Type floor (e.g. 1)" autocomplete="off">
                         </div>
                         <div id="regFloorList" class="reg-dropdown" style="display:none;"></div>
                     </div>
 
                     <div class="cust-field" style="position:relative;">
-                        <label>Door No <span style="color:#b51f2c;">*</span></label>
+                        <label>Door No</label>
                         <div class="cust-input-wrap">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <rect x="3" y="3" width="7" height="7" rx="1" />
@@ -140,11 +139,62 @@
                                 <rect x="14" y="14" width="7" height="7" rx="1" />
                             </svg>
                             <input type="text" class="cust-input" id="regDoorNo"
-                                placeholder="Search or type door no (e.g. 101)" autocomplete="off">
+                                placeholder="Type door no (e.g. 101)" autocomplete="off">
                         </div>
                         <div id="regDoorNoList" class="reg-dropdown" style="display:none;"></div>
                         <p class="mm-co-hint" id="regVariantHint"></p>
                     </div>
+
+                    <!-- Landmark -->
+                    <div class="cust-field">
+                        <label>Landmark <span style="font-size:10.5px;color:#948c82;font-weight:600;text-transform:none;letter-spacing:0;">(optional)</span></label>
+                        <div class="cust-input-wrap">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 1 1 18 0z" />
+                                <circle cx="12" cy="10" r="3" />
+                            </svg>
+                            <input type="text" class="cust-input" id="regHouseLandmark" placeholder="e.g. Near Green Valley Park">
+                        </div>
+                    </div>
+
+                    <!-- Google Maps for Apartment -->
+                    <!-- NEW: Google Maps for Apartment -->
+                    <div class="cust-field">
+                        <label>Google Maps Location <span style="font-size:10.5px;color:#948c82;font-weight:600;text-transform:none;letter-spacing:0;">(optional)</span></label>
+                        <div class="cust-input-wrap">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 1 1 18 0z" />
+                                <circle cx="12" cy="10" r="3" />
+                            </svg>
+                            <input type="text" class="cust-input" id="regAptMap" placeholder="Tap the button below to pin your location" maxlength="500" readonly>
+                        </div>
+                        <button type="button" class="loc-btn" id="regAptLocBtn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;">
+                                <circle cx="12" cy="12" r="3" />
+                                <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+                            </svg>
+                            <span id="regAptLocBtnText">Get My Current Location</span>
+                        </button>
+                        <p class="mm-co-hint" id="regAptLocHint"></p>
+                    </div>
+
+                    <!-- ✅ NEW: Apartment Image Upload -->
+                    <div class="cust-field">
+                        <label>Building / House Image (optional)</label>
+                        <div class="img-drop" id="regAptImgDrop">
+                            <input type="file" id="regAptImg" accept="image/*" style="display:none;">
+                            <div id="regAptImgPreview" class="img-drop-empty">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;">
+                                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                                    <circle cx="8.5" cy="8.5" r="1.5" />
+                                    <path d="M21 15l-5-5L5 21" />
+                                </svg>
+                                <span>Tap to upload a photo</span>
+                            </div>
+                        </div>
+                        <p class="mm-co-hint">Helps our delivery partner find you faster.</p>
+                    </div>
+                </div><!-- /#regApartmentBlock -->
                 </div><!-- /#regApartmentBlock -->
 
                 <!-- ================= INDIVIDUAL HOUSE MODE ================= -->
@@ -161,8 +211,20 @@
                         </div>
                     </div>
 
+                    <!-- Landmark for Individual House -->
                     <div class="cust-field">
-                        <label>Google Maps Location <span style="color:#b51f2c;">*</span></label>
+                        <label>Landmark <span style="font-size:10.5px;color:#948c82;font-weight:600;text-transform:none;letter-spacing:0;">(optional)</span></label>
+                        <div class="cust-input-wrap">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 1 1 18 0z" />
+                                <circle cx="12" cy="10" r="3" />
+                            </svg>
+                            <input type="text" class="cust-input" id="regHouseLandmark" placeholder="e.g. Near Green Valley Park">
+                        </div>
+                    </div>
+
+                    <div class="cust-field">
+                        <label>Google Maps Location <span style="font-size:10.5px;color:#948c82;font-weight:600;text-transform:none;letter-spacing:0;">(optional)</span></label>
                         <div class="cust-input-wrap">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 1 1 18 0z" />
@@ -198,6 +260,7 @@
                         <p class="mm-co-hint">Helps our delivery partner find you faster.</p>
                     </div>
                 </div><!-- /#regHouseBlock -->
+
                 <!-- ============ REFERRAL (optional) ============ -->
                 <div class="cust-field">
                     <label>Referred by <span style="font-size:10.5px;color:#948c82;font-weight:600;text-transform:none;letter-spacing:0;">(optional)</span></label>
@@ -407,48 +470,23 @@
         object-fit: cover;
     }
 
-    /* ============ Inline popup inside register modal ============ */
-    .reg-inline-popup {
-        display: none;
-        margin: 0 0 14px;
-        padding: 12px 14px;
-        border-radius: 10px;
-        font-size: 12.5px;
-        font-weight: 700;
-        line-height: 1.45;
-        border: 1.5px solid transparent;
-        animation: regPopIn .2s ease;
+    /* Force SweetAlert to sit above all popups */
+    .swal-high-z-index {
+        z-index: 99999 !important;
     }
 
-    .reg-inline-popup.show {
+    /* Force hide dropdowns when typing manually */
+    .mm-co-dropdown,
+    .reg-dropdown {
+        display: none;
+    }
+
+    /* Show only when explicitly triggered */
+    .mm-co-dropdown.active,
+    .reg-dropdown.active {
         display: block;
     }
-
-    .reg-inline-popup.success {
-        background: #e8f6ea;
-        border-color: #a5d6a7;
-        color: #1b5e20;
+    .cust-btn{
+        margin-bottom: 10px;
     }
-
-    .reg-inline-popup.error {
-        background: #fdeaea;
-        border-color: #f5b5b5;
-        color: #b71c1c;
-    }
-
-    @keyframes regPopIn {
-        from {
-            opacity: 0;
-            transform: translateY(-4px);
-        }
-
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-    /* Force SweetAlert to sit above all popups */
-.swal-high-z-index {
-    z-index: 99999 !important;
-}
 </style>

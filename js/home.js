@@ -1,6 +1,6 @@
 /* =========================================================
    MRS MILL@ — CUSTOMER STORE
-   File: ./js/home.js   (v2026-11-03d)
+   File: ./js/home.js   (v2026-11-05b)
    ========================================================= */
 
 (function () {
@@ -19,16 +19,9 @@
         if (Swal_) {
             const icon = (type === "error") ? "error" : (type === "success" ? "success" : "info");
             Swal_.fire({
-                toast: true,
-                position: "top-end",
-                icon: icon,
-                title: msg,
-                showConfirmButton: false,
-                timer: 3000,
-                timerProgressBar: true,
-                customClass: {
-                    container: 'swal-high-z-index' // Force high z-index
-                }
+                toast: true, position: "top-end", icon: icon, title: msg,
+                showConfirmButton: false, timer: 3000, timerProgressBar: true,
+                customClass: { container: 'swal-high-z-index' }
             });
             return;
         }
@@ -43,13 +36,10 @@
     function sModal(title, html, icon) {
         if (Swal_) {
             return Swal_.fire({
-                title: title || "",
-                html: html || "",
-                icon: icon || "info",
-                confirmButtonColor: "#b51f2c",
-                confirmButtonText: "OK",
-                allowOutsideClick: true,
-                allowEscapeKey: true,
+                title: title || "", html: html || "", icon: icon || "info",
+                confirmButtonColor: "#b51f2c", confirmButtonText: "OK",
+                allowOutsideClick: true, allowEscapeKey: true,
+                customClass: { container: 'swal-high-z-index' }
             });
         }
         alert((title || "") + "\n\n" + String(html || "").replace(/<[^>]+>/g, ""));
@@ -91,6 +81,18 @@
     const regDoorNoList = document.getElementById("regDoorNoList");
     const regVariantHint = document.getElementById("regVariantHint");
 
+    const regHouseLandmark = document.getElementById("regHouseLandmark");
+
+    // APARTMENT MAP & IMAGE ELEMENTS
+    const regAptMap = document.getElementById("regAptMap");
+    const regAptLocBtn = document.getElementById("regAptLocBtn");
+    const regAptLocText = document.getElementById("regAptLocBtnText");
+    const regAptLocHint = document.getElementById("regAptLocHint");
+    const regAptImg = document.getElementById("regAptImg");
+    const regAptImgDrop = document.getElementById("regAptImgDrop");
+    const regAptImgPrev = document.getElementById("regAptImgPreview");
+
+    // HOUSE MAP & IMAGE ELEMENTS
     const regBtn = document.getElementById("registerBtn");
     const regBtnText = document.getElementById("registerBtnText");
     const regClose = document.getElementById("registerClose");
@@ -119,6 +121,8 @@
         regMode: "apartment",
         regHouseImgData: "",
         regHouseMapLink: "",
+        regAptMapLink: "",
+        regAptImgData: "",
         currentVariants: [],
         selectedCharge: null
     };
@@ -151,14 +155,10 @@
 
     document.addEventListener("click", function (e) {
         const inside =
-            e.target.closest("#regApartmentList") ||
-            e.target.closest("#regBlockList") ||
-            e.target.closest("#regFloorList") ||
-            e.target.closest("#regDoorNoList") ||
-            e.target.closest("#regApartmentSearch") ||
-            e.target.closest("#regBlock") ||
-            e.target.closest("#regFloor") ||
-            e.target.closest("#regDoorNo");
+            e.target.closest("#regApartmentList") || e.target.closest("#regBlockList") ||
+            e.target.closest("#regFloorList") || e.target.closest("#regDoorNoList") ||
+            e.target.closest("#regApartmentSearch") || e.target.closest("#regBlock") ||
+            e.target.closest("#regFloor") || e.target.closest("#regDoorNo");
         if (!inside) closeAllDropdowns();
     });
 
@@ -281,11 +281,6 @@
             .then(r => r.json().catch(() => null))
             .then(res => {
                 if (!res || !res.success || !res.data) return;
-                if (res.data.has_pending_request) {
-                    closeLogin();
-                    sModal("Request already sent", "You've already sent a request. Our team will contact you soon.", "info");
-                    return;
-                }
                 if (res.data.exists) {
                     if (res.data.has_password) {
                         loginPasswordField.style.display = "";
@@ -305,76 +300,41 @@
             e.preventDefault();
             const mobile = (loginMobile.value || "").trim();
             const password = (loginPassword.value || "").trim();
-            if (!/^[0-9]{10,15}$/.test(mobile)) {
-                sToast("Mobile must be 10–15 digits.", "error");
-                loginMobile.focus();
-                return;
-            }
+            if (!/^[0-9]{10,15}$/.test(mobile)) { sToast("Mobile must be 10–15 digits.", "error"); return; }
+
             if (loginPasswordField && loginPasswordField.style.display !== "none") {
-                submitLogin(mobile, password);
+                if (!password) { sToast("Please enter your password.", "error"); return; }
+                loginBtn.disabled = true; loginBtnText.innerHTML = '...';
+                const fd = new FormData();
+                fd.append("mobile_number", mobile);
+                fd.append("password", password);
+                fetch(MAIN_URL + "ajax/customer-login.php", { method: "POST", body: fd, credentials: "same-origin" })
+                    .then(r => r.json().catch(() => null))
+                    .then(res => {
+                        loginBtn.disabled = false; loginBtnText.textContent = "Login";
+                        if (!res || !res.success) { sToast((res && res.message) || "Login failed.", "error"); return; }
+                        IS_LOGGED_IN = true; closeLogin(); sToast("Welcome back!", "success");
+                        setTimeout(() => window.location.reload(), 800);
+                    })
+                    .catch(() => { loginBtn.disabled = false; loginBtnText.textContent = "Login"; sToast("Unable to connect.", "error"); });
                 return;
             }
-            loginBtn.disabled = true;
-            loginBtnText.innerHTML = '...';
+
+            loginBtn.disabled = true; loginBtnText.innerHTML = '...';
             fetch(MAIN_URL + "ajax/customer-lookup.php?mobile=" + encodeURIComponent(mobile), { credentials: "same-origin" })
                 .then(r => r.json().catch(() => null))
                 .then(res => {
-                    loginBtn.disabled = false;
-                    loginBtnText.textContent = "Continue";
-                    if (!res || !res.success || !res.data) {
-                        sToast((res && res.message) || "Lookup failed.", "error");
-                        return;
-                    }
-                    if (res.data.has_pending_request) {
-                        closeLogin();
-                        sModal("Request already sent", "You've already sent a request. Our team will contact you soon.", "info");
-                        return;
-                    }
+                    loginBtn.disabled = false; loginBtnText.textContent = "Continue";
+                    if (!res || !res.success || !res.data) { sToast((res && res.message) || "Lookup failed.", "error"); return; }
                     if (res.data.exists) {
                         if (res.data.has_password) {
-                            loginPasswordField.style.display = "";
-                            loginBtnText.textContent = "Login";
+                            loginPasswordField.style.display = ""; loginBtnText.textContent = "Login";
                             setTimeout(() => loginPassword && loginPassword.focus(), 100);
-                        } else {
-                            closeLogin();
-                            openRegister(mobile, res.data);
-                        }
-                    } else {
-                        closeLogin();
-                        openRegister(mobile, null);
-                    }
+                        } else { closeLogin(); openRegister(mobile, res.data); }
+                    } else { closeLogin(); openRegister(mobile, null); }
                 })
-                .catch(() => {
-                    loginBtn.disabled = false;
-                    loginBtnText.textContent = "Continue";
-                    sToast("Unable to connect.", "error");
-                });
+                .catch(() => { loginBtn.disabled = false; loginBtnText.textContent = "Continue"; sToast("Unable to connect.", "error"); });
         });
-    }
-
-    function submitLogin(mobile, password) {
-        if (!password) { sToast("Please enter your password.", "error"); loginPassword.focus(); return; }
-        loginBtn.disabled = true;
-        loginBtnText.innerHTML = '...';
-        const fd = new FormData();
-        fd.append("mobile_number", mobile);
-        fd.append("password", password);
-        fetch(MAIN_URL + "ajax/customer-login.php", { method: "POST", body: fd, credentials: "same-origin" })
-            .then(r => r.json().catch(() => null))
-            .then(res => {
-                loginBtn.disabled = false;
-                loginBtnText.textContent = "Login";
-                if (!res || !res.success) { sToast((res && res.message) || "Login failed.", "error"); return; }
-                IS_LOGGED_IN = true;
-                closeLogin();
-                sToast("Welcome back!", "success");
-                setTimeout(() => window.location.reload(), 800);
-            })
-            .catch(() => {
-                loginBtn.disabled = false;
-                loginBtnText.textContent = "Login";
-                sToast("Unable to connect.", "error");
-            });
     }
 
     /* ---------- REGISTER ---------- */
@@ -388,6 +348,56 @@
     if (btnAptMode) btnAptMode.addEventListener("click", () => setRegMode("apartment"));
     if (btnHouseMode) btnHouseMode.addEventListener("click", () => setRegMode("individual_house"));
 
+    // Apartment Location Button
+    if (regAptLocBtn) {
+        regAptLocBtn.addEventListener("click", function () {
+            if (!navigator.geolocation) {
+                if (regAptLocHint) regAptLocHint.textContent = "Browser does not support location.";
+                return;
+            }
+            regAptLocBtn.disabled = true;
+            if (regAptLocText) regAptLocText.textContent = "Fetching location…";
+            navigator.geolocation.getCurrentPosition(
+                function (pos) {
+                    const link = "https://www.google.com/maps?q=" + pos.coords.latitude + "," + pos.coords.longitude;
+                    state.regAptMapLink = link;
+                    if (regAptMap) regAptMap.value = link;
+                    regAptLocBtn.disabled = false;
+                    regAptLocBtn.classList.add("success");
+                    if (regAptLocText) regAptLocText.textContent = "Location Pinned ✓";
+                    if (regAptLocHint) regAptLocHint.textContent = "Location saved.";
+                },
+                function () {
+                    regAptLocBtn.disabled = false;
+                    if (regAptLocText) regAptLocText.textContent = "Get My Current Location";
+                    if (regAptLocHint) regAptLocHint.textContent = "Permission denied.";
+                },
+                { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+            );
+        });
+    }
+
+    // Apartment Image Upload
+    if (regAptImgDrop) regAptImgDrop.addEventListener("click", () => { if (regAptImg) regAptImg.click(); });
+    if (regAptImg) {
+        regAptImg.addEventListener("change", function () {
+            const file = this.files && this.files[0];
+            if (!file) return;
+            if (!/^image\//.test(file.type)) { sToast("Please choose an image file.", "error"); return; }
+            if (file.size > 3 * 1024 * 1024) { sToast("Image must be under 3 MB.", "error"); return; }
+            const reader = new FileReader();
+            reader.onload = function (evt) {
+                state.regAptImgData = evt.target.result;
+                if (regAptImgPrev) {
+                    regAptImgPrev.classList.remove("img-drop-empty");
+                    regAptImgPrev.innerHTML = '<img src="' + state.regAptImgData + '" alt="Preview">';
+                }
+            };
+            reader.readAsDataURL(file);
+        });
+    }
+
+    // House Location Button
     if (regHouseLocBtn) {
         regHouseLocBtn.addEventListener("click", function () {
             if (!navigator.geolocation) {
@@ -414,6 +424,8 @@
             );
         });
     }
+
+    // House Image Upload
     if (regHouseImgDrop) regHouseImgDrop.addEventListener("click", () => { if (regHouseImg) regHouseImg.click(); });
     if (regHouseImg) {
         regHouseImg.addEventListener("change", function () {
@@ -455,6 +467,21 @@
         if (regAptCode) regAptCode.value = "";
         if (regAptHint) regAptHint.textContent = "";
 
+        // Clear apartment map & image
+        if (regHouseLandmark) regHouseLandmark.value = "";
+        if (regAptMap) regAptMap.value = "";
+        if (regAptLocHint) regAptLocHint.textContent = "";
+        if (regAptLocBtn) { regAptLocBtn.disabled = false; regAptLocBtn.classList.remove("success"); }
+        if (regAptLocText) regAptLocText.textContent = "Get My Current Location";
+        if (regAptImg) regAptImg.value = "";
+        if (regAptImgPrev) {
+            regAptImgPrev.classList.add("img-drop-empty");
+            regAptImgPrev.innerHTML = '<span>Tap to upload a photo</span>';
+        }
+        state.regAptMapLink = "";
+        state.regAptImgData = "";
+
+        // Clear house map & image
         if (regHouseAddress) regHouseAddress.value = "";
         if (regHouseMap) regHouseMap.value = "";
         if (regHouseLocHint) regHouseLocHint.textContent = "";
@@ -544,7 +571,7 @@
         if (regBlock) regBlock.value = "";
         if (regFloor) regFloor.value = "";
         if (regDoorNo) regDoorNo.value = "";
-        if (regVariantHint) regVariantHint.textContent = state.currentVariants.length ? "Pick block, floor, door no." : "No variants.";
+        if (regVariantHint) regVariantHint.textContent = state.currentVariants.length ? "Pick block, floor, door no." : "No variants — you can still create your account with new floor/door.";
         state.selectedCharge = null;
     }
 
@@ -563,13 +590,16 @@
         if (!listEl) return;
         const q = (currentValue || "").trim().toLowerCase();
         const filtered = q ? items.filter(v => v.toLowerCase().includes(q)) : items;
+
         if (!filtered.length) {
-            listEl.innerHTML = `<div style="padding:12px;text-align:center;font-size:12px;color:#948c82;">No matches. You can type your own.</div>`;
-            listEl.style.display = "block"; return;
+            listEl.style.display = "none";
+            return;
         }
+
         listEl.innerHTML = filtered.slice(0, 60).map(v =>
             `<div class="mm-co-dd-item" data-value="${escapeHtml(v)}">${escapeHtml(v)}</div>`
         ).join("");
+
         listEl.style.display = "block";
         listEl.onclick = function (e) {
             const item = e.target.closest(".mm-co-dd-item");
@@ -594,7 +624,7 @@
             state.selectedCharge = match.charge;
             if (regVariantHint) regVariantHint.textContent = "Delivery charge: ₹" + Math.round(match.charge);
         } else {
-            if (regVariantHint) regVariantHint.textContent = "Combination not found (will be sent as a request).";
+            if (regVariantHint) regVariantHint.textContent = "New combination — it will be added to this apartment automatically.";
         }
     }
     if (regBlock) {
@@ -660,7 +690,7 @@
                 if (regAptHint) regAptHint.textContent = "";
             } else if (typed.length > 0) {
                 state.customApartment = true;
-                if (regAptHint) regAptHint.textContent = "Custom apartment — will be sent as a request to admin.";
+                if (regAptHint) regAptHint.textContent = "New apartment — will be sent as a request to admin.";
             } else {
                 state.customApartment = false;
                 if (regAptHint) regAptHint.textContent = "";
@@ -675,7 +705,7 @@
     }
 
     /* =========================================================
-       REGISTER SUBMIT — modal stays open on validation errors
+       REGISTER SUBMIT
        ========================================================= */
     if (regForm) {
         regForm.addEventListener("submit", function (e) {
@@ -686,19 +716,9 @@
             const password = regPassword ? (regPassword.value || "").trim() : "";
             const referrer = regReferrer ? (regReferrer.value || "").trim() : "";
 
-            /* ---------- Client-side validation (modal stays open) ---------- */
-            if (name.length < 3) {
-                sModal("Invalid Name", "Name must be at least 3 characters.", "warning");
-                if (regName) regName.focus();
-                return;
-            }
-            if (password.length < 3) {
-                sModal("Invalid Password", "Password must be at least 3 characters.", "warning");
-                if (regPassword) regPassword.focus();
-                return;
-            }
+            if (name.length < 3) { sModal("Invalid Name", "Name must be at least 3 characters.", "warning"); if (regName) regName.focus(); return; }
+            if (password.length < 3) { sModal("Invalid Password", "Password must be at least 3 characters.", "warning"); if (regPassword) regPassword.focus(); return; }
 
-            /* ---------- Build FormData ---------- */
             const fd = new FormData();
             fd.append("full_name", name);
             fd.append("mobile_number", mobile);
@@ -707,18 +727,14 @@
 
             if (state.regMode === "individual_house") {
                 const houseAddr = regHouseAddress ? (regHouseAddress.value || "").trim() : "";
-                if (!houseAddr) {
-                    sModal("Missing Address", "Full address is required.", "warning");
-                    if (regHouseAddress) regHouseAddress.focus();
-                    return;
-                }
-                if (!state.regHouseMapLink) {
-                    sModal("Missing Location", "Please pin your location first.", "warning");
-                    return;
-                }
+                const houseLandmark = regHouseLandmark ? (regHouseLandmark.value || "").trim() : "";
+
+                if (!houseAddr) { sModal("Missing Address", "Full address is required.", "warning"); if (regHouseAddress) regHouseAddress.focus(); return; }
+
                 fd.append("request_type", "individual_house");
                 fd.append("house_address", houseAddr);
-                fd.append("map_link", state.regHouseMapLink);
+                fd.append("landmark", houseLandmark);
+                if (state.regHouseMapLink) fd.append("map_link", state.regHouseMapLink);
                 if (state.regHouseImgData) fd.append("house_image_data", state.regHouseImgData);
             } else {
                 const aptId = regAptId ? (regAptId.value || "").trim() : "";
@@ -726,40 +742,46 @@
                 const block = regBlock ? (regBlock.value || "").trim() : "";
                 const floor = regFloor ? (regFloor.value || "").trim() : "";
                 const doorNo = regDoorNo ? (regDoorNo.value || "").trim() : "";
+                const landmark = regHouseLandmark ? (regHouseLandmark.value || "").trim() : "";
 
-                if (!aptText) {
-                    sModal("Missing Apartment", "Apartment is required.", "warning");
-                    if (regAptSearch) regAptSearch.focus();
-                    return;
-                }
-                if (!block || !floor || !doorNo) {
-                    sModal("Missing Address Details", "Please enter Block, Floor and Door No.", "warning");
-                    if (!block && regBlock) regBlock.focus();
-                    else if (!floor && regFloor) regFloor.focus();
-                    else if (!doorNo && regDoorNo) regDoorNo.focus();
-                    return;
+                if (!aptText) { sModal("Missing Apartment", "Apartment is required.", "warning"); if (regAptSearch) regAptSearch.focus(); return; }
+
+                const divisionText = (block || floor || doorNo)
+                    ? "Blk " + block + " / Door " + doorNo + " / Fl " + floor
+                    : "";
+
+                /* PHP decides:
+                   - apartment exists → create customer (append new division if needed)
+                   - apartment doesn't exist → save as request */
+                if (aptId && aptId !== "0") fd.append("apartment_id", aptId);
+                fd.append("apartment_name", aptText);
+                fd.append("division", divisionText);
+
+                /* Only send block/floor/door when at least one is filled
+                   (prevents empty division rows in apartments.divisions) */
+                if (block !== "" || floor !== "" || doorNo !== "") {
+                    fd.append("block", block);
+                    fd.append("floor", floor);
+                    fd.append("door_no", doorNo);
                 }
 
-                if (aptId && aptId !== "0") {
-                    fd.append("apartment_id", aptId);
-                    fd.append("division", "Blk " + block + " / Door " + doorNo + " / Fl " + floor);
-                } else {
+                fd.append("landmark", landmark);
+                if (state.regAptMapLink) fd.append("map_link", state.regAptMapLink);
+                if (state.regAptImgData) fd.append("house_image_data", state.regAptImgData);
+
+                /* Backwards-compat keys for old backend logic */
+                if (!aptId || aptId === "0") {
                     fd.append("custom_apartment", aptText);
-                    fd.append("custom_division", "Blk " + block + " / Door " + doorNo + " / Fl " + floor);
+                    fd.append("custom_division", divisionText);
                 }
             }
 
-            /* ---------- Submit (only NOW close the modal) ---------- */
             if (regBtn) regBtn.disabled = true;
             if (regBtnText) regBtnText.innerHTML = 'Creating…';
-
-            // Close modal only when we are about to actually send the request
             closeRegister();
 
             fetch(MAIN_URL + "ajax/customer-register.php", {
-                method: "POST",
-                body: fd,
-                credentials: "same-origin"
+                method: "POST", body: fd, credentials: "same-origin"
             })
                 .then(r => r.json().catch(() => null))
                 .then(res => {
@@ -770,17 +792,17 @@
                         sModal("Registration Failed", (res && res.message) || "Please try again.", "error");
                         return;
                     }
-
                     if (res.data && res.data.request_only) {
-                        const extra = res.data.already_requested
-                            ? "<br><br>You already sent a request earlier."
-                            : "";
+                        const extra = res.data.already_requested ? "<br><br>You already sent a request earlier." : "";
                         sModal("Request Submitted", (res.message || "Our team will contact you soon.") + extra, "success");
                         return;
                     }
-
                     IS_LOGGED_IN = true;
-                    sToast("Account created! Welcome!", "success");
+                    if (res.data && res.data.new_division_added) {
+                        sToast("Account created!", "success");
+                    } else {
+                        sToast("Account created! Welcome!", "success");
+                    }
                     setTimeout(() => window.location.reload(), 1000);
                 })
                 .catch(() => {
@@ -792,7 +814,7 @@
     }
 
     /* =========================================================
-       PRODUCT CARDS
+       PRODUCT CARDS & CART
        ========================================================= */
     const productCards = document.querySelectorAll(".js-product-card");
 
