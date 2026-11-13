@@ -1,6 +1,6 @@
 /* =========================================================
    MRS MILL@ — CUSTOMER STORE
-   File: ./js/home.js   (v2026-11-05b)
+   File: ./js/home.js   (v2026-11-13b)
    ========================================================= */
 
 (function () {
@@ -11,9 +11,6 @@
 
     const Swal_ = (typeof window.Swal !== "undefined") ? window.Swal : null;
 
-    /* -----------------------------------------------------------
-       SweetAlert helpers
-       ----------------------------------------------------------- */
     function sToast(msg, type) {
         type = type || "info";
         if (Swal_) {
@@ -82,12 +79,19 @@
     const regVariantHint = document.getElementById("regVariantHint");
 
     const regHouseLandmark = document.getElementById("regHouseLandmark");
+    const regHouseLandmark2 = document.getElementById("regHouseLandmark2");
+
+    // ✅ Apartment Full Address
+    const regAptAddress = document.getElementById("regAptAddress");
 
     // APARTMENT MAP & IMAGE ELEMENTS
     const regAptMap = document.getElementById("regAptMap");
     const regAptLocBtn = document.getElementById("regAptLocBtn");
     const regAptLocText = document.getElementById("regAptLocBtnText");
     const regAptLocHint = document.getElementById("regAptLocHint");
+    const regAptLocActions = document.getElementById("regAptLocActions");
+    const regAptLocEdit = document.getElementById("regAptLocEdit");
+    const regAptLocUndo = document.getElementById("regAptLocUndo");
     const regAptImg = document.getElementById("regAptImg");
     const regAptImgDrop = document.getElementById("regAptImgDrop");
     const regAptImgPrev = document.getElementById("regAptImgPreview");
@@ -106,6 +110,9 @@
     const regHouseLocBtn = document.getElementById("regHouseLocBtn");
     const regHouseLocText = document.getElementById("regHouseLocBtnText");
     const regHouseLocHint = document.getElementById("regHouseLocHint");
+    const regHouseLocActions = document.getElementById("regHouseLocActions");
+    const regHouseLocEdit = document.getElementById("regHouseLocEdit");
+    const regHouseLocUndo = document.getElementById("regHouseLocUndo");
     const regHouseImg = document.getElementById("regHouseImg");
     const regHouseImgDrop = document.getElementById("regHouseImgDrop");
     const regHouseImgPrev = document.getElementById("regHouseImgPreview");
@@ -348,32 +355,102 @@
     if (btnAptMode) btnAptMode.addEventListener("click", () => setRegMode("apartment"));
     if (btnHouseMode) btnHouseMode.addEventListener("click", () => setRegMode("individual_house"));
 
-    // Apartment Location Button
+    /* =========================================================
+       ✅ LOCATION HELPERS (shared by Apartment & House)
+       ========================================================= */
+    function setLocState(opts) {
+        // opts: { input, btn, btnText, hint, actions, editBtn, undoBtn, link, hasLink }
+        const { input, btn, btnText, hint, actions } = opts;
+        if (opts.hasLink) {
+            if (input) input.value = opts.link || "";
+            if (btn) { btn.disabled = true; btn.classList.add("success"); }
+            if (btnText) btnText.textContent = "Location Pinned ✓";
+            if (hint) hint.textContent = "Location saved. Use Edit / Undo below.";
+            if (actions) actions.style.display = "flex";
+        } else {
+            if (input) input.value = "";
+            if (btn) { btn.disabled = false; btn.classList.remove("success"); }
+            if (btnText) btnText.textContent = "Get My Current Location";
+            if (hint) hint.textContent = "";
+            if (actions) actions.style.display = "none";
+        }
+    }
+
+    function requestLocation(opts) {
+        const { input, btn, btnText, hint, actions } = opts;
+        if (!navigator.geolocation) {
+            if (hint) hint.textContent = "Browser does not support location.";
+            return;
+        }
+        if (btn) btn.disabled = true;
+        if (btnText) btnText.textContent = "Fetching location…";
+        navigator.geolocation.getCurrentPosition(
+            function (pos) {
+                const link = "https://www.google.com/maps?q=" + pos.coords.latitude + "," + pos.coords.longitude;
+                opts.onSuccess(link);
+                setLocState(Object.assign({}, opts, { hasLink: true, link: link }));
+            },
+            function () {
+                if (btn) btn.disabled = false;
+                if (btnText) btnText.textContent = "Get My Current Location";
+                if (hint) hint.textContent = "Permission denied or unavailable.";
+            },
+            { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+        );
+    }
+
+    // ---- Apartment location wiring ----
     if (regAptLocBtn) {
         regAptLocBtn.addEventListener("click", function () {
-            if (!navigator.geolocation) {
-                if (regAptLocHint) regAptLocHint.textContent = "Browser does not support location.";
-                return;
+            requestLocation({
+                input: regAptMap, btn: regAptLocBtn, btnText: regAptLocText,
+                hint: regAptLocHint, actions: regAptLocActions,
+                onSuccess: function (link) { state.regAptMapLink = link; }
+            });
+        });
+    }
+    if (regAptLocEdit) {
+        regAptLocEdit.addEventListener("click", function () {
+            // Open Google Maps so user can verify / edit in a new tab
+            if (state.regAptMapLink) {
+                window.open(state.regAptMapLink, "_blank");
             }
-            regAptLocBtn.disabled = true;
-            if (regAptLocText) regAptLocText.textContent = "Fetching location…";
-            navigator.geolocation.getCurrentPosition(
-                function (pos) {
-                    const link = "https://www.google.com/maps?q=" + pos.coords.latitude + "," + pos.coords.longitude;
-                    state.regAptMapLink = link;
-                    if (regAptMap) regAptMap.value = link;
-                    regAptLocBtn.disabled = false;
-                    regAptLocBtn.classList.add("success");
-                    if (regAptLocText) regAptLocText.textContent = "Location Pinned ✓";
-                    if (regAptLocHint) regAptLocHint.textContent = "Location saved.";
-                },
-                function () {
-                    regAptLocBtn.disabled = false;
-                    if (regAptLocText) regAptLocText.textContent = "Get My Current Location";
-                    if (regAptLocHint) regAptLocHint.textContent = "Permission denied.";
-                },
-                { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
-            );
+        });
+    }
+    if (regAptLocUndo) {
+        regAptLocUndo.addEventListener("click", function () {
+            state.regAptMapLink = "";
+            setLocState({
+                input: regAptMap, btn: regAptLocBtn, btnText: regAptLocText,
+                hint: regAptLocHint, actions: regAptLocActions, hasLink: false
+            });
+        });
+    }
+
+    // ---- House location wiring ----
+    if (regHouseLocBtn) {
+        regHouseLocBtn.addEventListener("click", function () {
+            requestLocation({
+                input: regHouseMap, btn: regHouseLocBtn, btnText: regHouseLocText,
+                hint: regHouseLocHint, actions: regHouseLocActions,
+                onSuccess: function (link) { state.regHouseMapLink = link; }
+            });
+        });
+    }
+    if (regHouseLocEdit) {
+        regHouseLocEdit.addEventListener("click", function () {
+            if (state.regHouseMapLink) {
+                window.open(state.regHouseMapLink, "_blank");
+            }
+        });
+    }
+    if (regHouseLocUndo) {
+        regHouseLocUndo.addEventListener("click", function () {
+            state.regHouseMapLink = "";
+            setLocState({
+                input: regHouseMap, btn: regHouseLocBtn, btnText: regHouseLocText,
+                hint: regHouseLocHint, actions: regHouseLocActions, hasLink: false
+            });
         });
     }
 
@@ -394,34 +471,6 @@
                 }
             };
             reader.readAsDataURL(file);
-        });
-    }
-
-    // House Location Button
-    if (regHouseLocBtn) {
-        regHouseLocBtn.addEventListener("click", function () {
-            if (!navigator.geolocation) {
-                if (regHouseLocHint) regHouseLocHint.textContent = "Browser does not support location.";
-                return;
-            }
-            regHouseLocBtn.disabled = true;
-            if (regHouseLocText) regHouseLocText.textContent = "Fetching location…";
-            navigator.geolocation.getCurrentPosition(
-                function (pos) {
-                    const link = "https://www.google.com/maps?q=" + pos.coords.latitude + "," + pos.coords.longitude;
-                    state.regHouseMapLink = link;
-                    if (regHouseMap) regHouseMap.value = link;
-                    regHouseLocBtn.disabled = false;
-                    regHouseLocBtn.classList.add("success");
-                    if (regHouseLocText) regHouseLocText.textContent = "Location Pinned ✓";
-                    if (regHouseLocHint) regHouseLocHint.textContent = "Location saved.";
-                },
-                function () {
-                    regHouseLocBtn.disabled = false;
-                    if (regHouseLocText) regHouseLocText.textContent = "Get My Current Location";
-                },
-                { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
-            );
         });
     }
 
@@ -466,34 +515,37 @@
         if (regAptId) regAptId.value = "";
         if (regAptCode) regAptCode.value = "";
         if (regAptHint) regAptHint.textContent = "";
+        if (regAptAddress) regAptAddress.value = "";
 
-        // Clear apartment map & image
         if (regHouseLandmark) regHouseLandmark.value = "";
-        if (regAptMap) regAptMap.value = "";
-        if (regAptLocHint) regAptLocHint.textContent = "";
-        if (regAptLocBtn) { regAptLocBtn.disabled = false; regAptLocBtn.classList.remove("success"); }
-        if (regAptLocText) regAptLocText.textContent = "Get My Current Location";
+        if (regHouseLandmark2) regHouseLandmark2.value = "";
+
+        // Reset apartment location UI
+        state.regAptMapLink = "";
+        setLocState({
+            input: regAptMap, btn: regAptLocBtn, btnText: regAptLocText,
+            hint: regAptLocHint, actions: regAptLocActions, hasLink: false
+        });
         if (regAptImg) regAptImg.value = "";
         if (regAptImgPrev) {
             regAptImgPrev.classList.add("img-drop-empty");
             regAptImgPrev.innerHTML = '<span>Tap to upload a photo</span>';
         }
-        state.regAptMapLink = "";
         state.regAptImgData = "";
 
-        // Clear house map & image
+        // Reset house location UI
         if (regHouseAddress) regHouseAddress.value = "";
-        if (regHouseMap) regHouseMap.value = "";
-        if (regHouseLocHint) regHouseLocHint.textContent = "";
-        if (regHouseLocBtn) { regHouseLocBtn.disabled = false; regHouseLocBtn.classList.remove("success"); }
-        if (regHouseLocText) regHouseLocText.textContent = "Get My Current Location";
+        state.regHouseMapLink = "";
+        setLocState({
+            input: regHouseMap, btn: regHouseLocBtn, btnText: regHouseLocText,
+            hint: regHouseLocHint, actions: regHouseLocActions, hasLink: false
+        });
         if (regHouseImg) regHouseImg.value = "";
         if (regHouseImgPrev) {
             regHouseImgPrev.classList.add("img-drop-empty");
             regHouseImgPrev.innerHTML = '<span>Tap to upload a photo</span>';
         }
         state.regHouseImgData = "";
-        state.regHouseMapLink = "";
 
         setRegMode("apartment");
         loadRegisterApartments(function () { });
@@ -727,13 +779,13 @@
 
             if (state.regMode === "individual_house") {
                 const houseAddr = regHouseAddress ? (regHouseAddress.value || "").trim() : "";
-                const houseLandmark = regHouseLandmark ? (regHouseLandmark.value || "").trim() : "";
+                const houseLandmarkVal = regHouseLandmark2 ? (regHouseLandmark2.value || "").trim() : "";
 
                 if (!houseAddr) { sModal("Missing Address", "Full address is required.", "warning"); if (regHouseAddress) regHouseAddress.focus(); return; }
 
                 fd.append("request_type", "individual_house");
                 fd.append("house_address", houseAddr);
-                fd.append("landmark", houseLandmark);
+                fd.append("landmark", houseLandmarkVal);
                 if (state.regHouseMapLink) fd.append("map_link", state.regHouseMapLink);
                 if (state.regHouseImgData) fd.append("house_image_data", state.regHouseImgData);
             } else {
@@ -743,33 +795,30 @@
                 const floor = regFloor ? (regFloor.value || "").trim() : "";
                 const doorNo = regDoorNo ? (regDoorNo.value || "").trim() : "";
                 const landmark = regHouseLandmark ? (regHouseLandmark.value || "").trim() : "";
+                const aptFullAddress = regAptAddress ? (regAptAddress.value || "").trim() : "";
 
                 if (!aptText) { sModal("Missing Apartment", "Apartment is required.", "warning"); if (regAptSearch) regAptSearch.focus(); return; }
+                if (!aptFullAddress) { sModal("Missing Address", "Please enter your full address.", "warning"); if (regAptAddress) regAptAddress.focus(); return; }
 
                 const divisionText = (block || floor || doorNo)
                     ? "Blk " + block + " / Door " + doorNo + " / Fl " + floor
                     : "";
 
-                /* PHP decides:
-                   - apartment exists → create customer (append new division if needed)
-                   - apartment doesn't exist → save as request */
                 if (aptId && aptId !== "0") fd.append("apartment_id", aptId);
                 fd.append("apartment_name", aptText);
                 fd.append("division", divisionText);
 
-                /* Only send block/floor/door when at least one is filled
-                   (prevents empty division rows in apartments.divisions) */
                 if (block !== "" || floor !== "" || doorNo !== "") {
                     fd.append("block", block);
                     fd.append("floor", floor);
                     fd.append("door_no", doorNo);
                 }
 
+                fd.append("house_address", aptFullAddress);
                 fd.append("landmark", landmark);
                 if (state.regAptMapLink) fd.append("map_link", state.regAptMapLink);
                 if (state.regAptImgData) fd.append("house_image_data", state.regAptImgData);
 
-                /* Backwards-compat keys for old backend logic */
                 if (!aptId || aptId === "0") {
                     fd.append("custom_apartment", aptText);
                     fd.append("custom_division", divisionText);

@@ -158,7 +158,6 @@
                     </div>
 
                     <!-- Google Maps for Apartment -->
-                    <!-- NEW: Google Maps for Apartment -->
                     <div class="cust-field">
                         <label>Google Maps Location <span style="font-size:10.5px;color:#948c82;font-weight:600;text-transform:none;letter-spacing:0;">(optional)</span></label>
                         <div class="cust-input-wrap">
@@ -175,10 +174,40 @@
                             </svg>
                             <span id="regAptLocBtnText">Get My Current Location</span>
                         </button>
+                        <!-- ✅ NEW: Edit / Undo row -->
+                        <div class="loc-actions" id="regAptLocActions" style="display:none;">
+                            <button type="button" class="loc-mini-btn" id="regAptLocEdit">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;">
+                                    <path d="M12 20h9" />
+                                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+                                </svg>
+                                Edit
+                            </button>
+                            <button type="button" class="loc-mini-btn danger" id="regAptLocUndo">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;">
+                                    <path d="M3 7v6h6" />
+                                    <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+                                </svg>
+                                Undo
+                            </button>
+                        </div>
                         <p class="mm-co-hint" id="regAptLocHint"></p>
                     </div>
 
-                    <!-- ✅ NEW: Apartment Image Upload -->
+                    <!-- ✅ NEW: Apartment Full Address -->
+                    <div class="cust-field">
+                        <label>Full Address <span style="color:#b51f2c;">*</span></label>
+                        <div class="cust-input-wrap">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M3 21V8l9-5 9 5v13" />
+                                <path d="M9 21V12h6v9" />
+                            </svg>
+                            <input type="text" class="cust-input" id="regAptAddress"
+                                placeholder="Door No, Street, Area, City" maxlength="250">
+                        </div>
+                    </div>
+
+                    <!-- Apartment Image Upload -->
                     <div class="cust-field">
                         <label>Building / House Image (optional)</label>
                         <div class="img-drop" id="regAptImgDrop">
@@ -194,7 +223,6 @@
                         </div>
                         <p class="mm-co-hint">Helps our delivery partner find you faster.</p>
                     </div>
-                </div><!-- /#regApartmentBlock -->
                 </div><!-- /#regApartmentBlock -->
 
                 <!-- ================= INDIVIDUAL HOUSE MODE ================= -->
@@ -219,7 +247,7 @@
                                 <path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 1 1 18 0z" />
                                 <circle cx="12" cy="10" r="3" />
                             </svg>
-                            <input type="text" class="cust-input" id="regHouseLandmark" placeholder="e.g. Near Green Valley Park">
+                            <input type="text" class="cust-input" id="regHouseLandmark2" placeholder="e.g. Near Green Valley Park">
                         </div>
                     </div>
 
@@ -241,6 +269,23 @@
                             </svg>
                             <span id="regHouseLocBtnText">Get My Current Location</span>
                         </button>
+                        <!-- ✅ NEW: Edit / Undo row -->
+                        <div class="loc-actions" id="regHouseLocActions" style="display:none;">
+                            <button type="button" class="loc-mini-btn" id="regHouseLocEdit">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;">
+                                    <path d="M12 20h9" />
+                                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+                                </svg>
+                                Edit
+                            </button>
+                            <button type="button" class="loc-mini-btn danger" id="regHouseLocUndo">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;">
+                                    <path d="M3 7v6h6" />
+                                    <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+                                </svg>
+                                Undo
+                            </button>
+                        </div>
                         <p class="mm-co-hint" id="regHouseLocHint"></p>
                     </div>
 
@@ -289,6 +334,77 @@
 </div>
 
 <style>
+    /* ===== Responsive modal gaps ===== */
+    .cust-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, .5);
+        z-index: 9000;
+        padding: 16px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .cust-overlay.show {
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+    }
+
+    .cust-modal {
+        position: relative;
+        width: 100%;
+        max-width: 460px;
+        margin: auto 0;
+        background: #fff;
+        border-radius: 18px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, .25);
+        overflow: hidden;
+        max-height: calc(100vh - 32px);
+        display: flex;
+        flex-direction: column;
+    }
+
+    .cust-body {
+        overflow-y: auto;
+        padding: 16px 18px 22px;
+    }
+
+    .cust-head {
+        padding: 22px 18px 6px;
+        text-align: center;
+    }
+
+    @media (max-width: 480px) {
+        .cust-overlay {
+            padding: 10px;
+        }
+
+        .cust-modal {
+            max-width: 100%;
+            border-radius: 16px;
+            max-height: calc(100vh - 20px);
+        }
+
+        .cust-body {
+            padding: 14px 14px 20px;
+        }
+
+        .cust-head {
+            padding: 18px 14px 4px;
+        }
+
+        .cust-field {
+            margin-bottom: 14px;
+        }
+
+        .cust-close {
+            top: 10px;
+            right: 10px;
+        }
+    }
+
     .pw-toggle {
         position: absolute;
         right: 10px;
@@ -435,6 +551,45 @@
         border-style: solid;
     }
 
+    /* ✅ NEW: Edit / Undo row under location */
+    .loc-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+    }
+
+    .loc-mini-btn {
+        flex: 1;
+        padding: 8px 10px;
+        border-radius: 9px;
+        font-size: 11.5px;
+        font-weight: 700;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        border: 1.5px solid #ece5da;
+        background: #fffdf9;
+        color: #6f675f;
+        transition: .15s ease;
+    }
+
+    .loc-mini-btn:hover {
+        background: #faf7f0;
+        color: #302923;
+    }
+
+    .loc-mini-btn.danger {
+        border-color: #f3c8cb;
+        background: #fff5f5;
+        color: #b51f2c;
+    }
+
+    .loc-mini-btn.danger:hover {
+        background: #fbe8e9;
+    }
+
     .img-drop {
         border: 1.5px dashed #d8cdbf;
         border-radius: 12px;
@@ -470,23 +625,21 @@
         object-fit: cover;
     }
 
-    /* Force SweetAlert to sit above all popups */
     .swal-high-z-index {
         z-index: 99999 !important;
     }
 
-    /* Force hide dropdowns when typing manually */
     .mm-co-dropdown,
     .reg-dropdown {
         display: none;
     }
 
-    /* Show only when explicitly triggered */
     .mm-co-dropdown.active,
     .reg-dropdown.active {
         display: block;
     }
-    .cust-btn{
+
+    .cust-btn {
         margin-bottom: 10px;
     }
 </style>

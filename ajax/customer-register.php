@@ -24,7 +24,7 @@ $doorIn        = trim($_POST['door_no']         ?? '');
 $customApt     = trim($_POST['custom_apartment'] ?? '');
 $customDiv     = trim($_POST['custom_division']  ?? '');
 
-/* House inputs */
+/* House / Full address inputs (used by BOTH modes now) */
 $houseAddr   = trim($_POST['house_address']    ?? '');
 $mapLink     = trim($_POST['map_link']         ?? '');
 $houseImgB64 = trim($_POST['house_image_data'] ?? '');
@@ -43,7 +43,8 @@ if (strlen($password) < 3) {
 /* =========================================================
    IMAGE UPLOAD HELPER
    ========================================================= */
-function saveBase64Image($base64String) {
+function saveBase64Image($base64String)
+{
     if ($base64String === '') return '';
     if (preg_match('/^data:image\/(png|jpe?g|webp|gif);base64,/i', $base64String, $m)) {
         $ext  = strtolower($m[1]) === 'jpeg' ? 'jpg' : strtolower($m[1]);
@@ -113,7 +114,7 @@ function saveReferral(PDO $pdo, int $customerId, string $name, string $mobile, s
 }
 
 /* =========================================================
-   INDIVIDUAL HOUSE (unchanged)
+   INDIVIDUAL HOUSE
    ========================================================= */
 if ($reqType === 'individual_house') {
     if ($houseAddr === '') jsonResponse(false, 'Please enter your full address.');
@@ -126,7 +127,9 @@ if ($reqType === 'individual_house') {
         $existing = $chk->fetch(PDO::FETCH_ASSOC);
         if ($existing) {
             jsonResponse(true, 'You have already sent a request. Our team will contact you soon.', [
-                'request_only' => true, 'already_requested' => true, 'request_id' => (int)$existing['id']
+                'request_only' => true,
+                'already_requested' => true,
+                'request_id' => (int)$existing['id']
             ]);
         }
 
@@ -146,7 +149,9 @@ if ($reqType === 'individual_house') {
         $requestId = (int)$pdo->lastInsertId();
 
         jsonResponse(true, 'Request submitted successfully.', [
-            'request_only' => true, 'already_requested' => false, 'request_id' => $requestId
+            'request_only' => true,
+            'already_requested' => false,
+            'request_id' => $requestId
         ]);
     } catch (PDOException $e) {
         jsonResponse(false, 'Server error: ' . $e->getMessage());
@@ -168,7 +173,8 @@ if ($customApt !== '') {
         $st = $pdo->prepare("SELECT apartment_name FROM apartments WHERE id = ? LIMIT 1");
         $st->execute([$apartmentId]);
         $typedName = (string)$st->fetchColumn();
-    } catch (PDOException $e) {}
+    } catch (PDOException $e) {
+    }
 }
 
 $typedName = trim($typedName);
@@ -214,7 +220,8 @@ try {
         );
         $aStmt->execute([$typedName]);
         $apt = $aStmt->fetch(PDO::FETCH_ASSOC);
-    } catch (PDOException $e) {}
+    } catch (PDOException $e) {
+    }
 
     /* =========================================================
        CASE A — Apartment EXISTS  →  create customer
@@ -284,7 +291,8 @@ try {
                     $u = $pdo->prepare("UPDATE apartments SET divisions = ? WHERE id = ?");
                     $u->execute([$newDivJson, $aptId]);
                     $newDivisionAdded = true;
-                } catch (PDOException $e) { /* ignore */ }
+                } catch (PDOException $e) { /* ignore */
+                }
             }
 
             $matchedCharge = $lastKnownCharge;
@@ -293,7 +301,8 @@ try {
             $matchedDoor   = $doorNo;
         }
 
-        /* Build address_json for the customer */
+        /* Build address_json for the customer
+           ✅ NEW: include full_address from the apartment form */
         $addressJson = [
             'apartment_id'   => $aptId,
             'apartment_code' => $aptCode,
@@ -303,6 +312,7 @@ try {
             'floor'          => $matchedFloor,
             'division_label' => $divisionLabel,
             'charge'         => $matchedCharge,
+            'full_address'   => $houseAddr,        // ✅ NEW
             'landmark'       => $landmark,
             'map_link'       => $mapLink,
             'house_image'    => $savedImagePath
@@ -374,13 +384,19 @@ try {
     $existing = $chk->fetch(PDO::FETCH_ASSOC);
     if ($existing) {
         jsonResponse(true, 'You have already sent a request. Our team will contact you soon.', [
-            'request_only' => true, 'already_requested' => true, 'request_id' => (int)$existing['id']
+            'request_only' => true,
+            'already_requested' => true,
+            'request_id' => (int)$existing['id']
         ]);
     }
 
     $passwordHash = password_hash($password, PASSWORD_DEFAULT);
 
+    /* ✅ NEW: include apartment full address in the request */
     $reqDivision = $divisionLabel;
+    if ($houseAddr !== '') {
+        $reqDivision .= ($reqDivision !== '' ? ' | ' : '') . "Address: " . $houseAddr;
+    }
     if ($landmark !== '') {
         $reqDivision .= ($reqDivision !== '' ? ' ' : '') . "(Landmark: " . $landmark . ")";
     }
@@ -400,7 +416,6 @@ try {
         'already_requested'  => false,
         'request_id'         => $requestId
     ]);
-
 } catch (PDOException $e) {
     jsonResponse(false, 'Server error: ' . $e->getMessage());
 }
