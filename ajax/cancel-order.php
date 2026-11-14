@@ -47,31 +47,28 @@ try {
     $currentTime = time();
     $diffMinutes = round(($currentTime - $orderTime) / 60);
 
-    $isPaid = ($order['payment_status'] === 'paid');
     $totalAmount = (float)$order['total_amount'];
     $refundAmount = 0.00;
     $deductionAmount = 0.00;
 
-    // 5. Calculate Refund
-    if ($isPaid) {
-        if ($diffMinutes <= 60) {
-            // Under 60 mins: Full refund
-            $refundAmount = $totalAmount;
-        } else {
-            // Over 60 mins: 10% deduction
-            $deductionAmount = round($totalAmount * 0.10, 2);
-            $refundAmount = $totalAmount - $deductionAmount;
-        }
+    // We refund the amount regardless of payment status (wallet credit)
+    if ($diffMinutes <= 60) {
+        // Under 60 mins: Full refund
+        $refundAmount = $totalAmount;
+    } else {
+        // Over 60 mins: 10% deduction
+        $deductionAmount = round($totalAmount * 0.10, 2);
+        $refundAmount = $totalAmount - $deductionAmount;
     }
 
-    // 6. Update Order Status
+    // 5. Update Order Status
     $pdo->beginTransaction();
 
     $updateOrder = $pdo->prepare("UPDATE orders SET status = 'cancelled' WHERE id = ?");
     $updateOrder->execute([$orderId]);
 
-    // 7. Process Wallet Refund
-    if ($isPaid && $refundAmount > 0) {
+    // 6. Process Wallet Refund (if amount > 0)
+    if ($refundAmount > 0) {
         // Get current balance
         $balStmt = $pdo->prepare("SELECT wallet_balance FROM customers WHERE id = ? LIMIT 1");
         $balStmt->execute([$customerRowId]);
@@ -108,9 +105,9 @@ try {
 
     $pdo->commit();
 
-    // 8. Return Success
+    // 7. Return Success
     $msg = "Order cancelled successfully.";
-    if ($isPaid) {
+    if ($refundAmount > 0) {
         if ($deductionAmount > 0) {
             $msg .= " ₹" . number_format($refundAmount, 2) . " has been refunded to your wallet (10% late cancellation fee applied).";
         } else {
