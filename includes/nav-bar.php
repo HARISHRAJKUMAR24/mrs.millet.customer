@@ -129,16 +129,12 @@ try {
         align-items: center;
     }
 
-    /* The actual moving text */
     .mm-marquee-content {
         display: inline-block;
         padding-left: 100%;
-        /* Start from the right */
-        animation: mmMarquee 15s linear infinite;
-        /* 15s to complete a loop */
+        animation: mmMarquee 40s linear infinite;
     }
 
-    /* Pause the animation when the user hovers over it */
     .mm-top-banner:hover .mm-marquee-content {
         animation-play-state: paused;
     }
