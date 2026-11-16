@@ -308,7 +308,7 @@ $currentYear = (int)date('Y');
         font-weight: 800;
     }
 
-    @media (max-width: 560px) {
+    @media (max-width: 720px) {
         .mm-footer-inner { padding: 18px 16px 10px; }
 
         .mm-footer-logo { height: 44px; }

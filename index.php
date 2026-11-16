@@ -8,113 +8,6 @@ $siteName = $settings['username'] ?? 'Mrs Mill@';
 $logoUrl  = !empty($settings['logo_image'])    ? ADMIN_URL . $settings['logo_image']    : '';
 $favicon  = !empty($settings['favicon_image']) ? ADMIN_URL . $settings['favicon_image'] : '';
 
-/* ---------- ALL ACTIVE MENUS ---------- */
-/* ---------- ACTIVE MENUS: HIDE EXPIRED MENUS ---------- */
-$activeMenus = getActiveMenus($pdo);
-
-$currentTime = time();
-
-$activeMenus = array_values(array_filter($activeMenus, function ($menu) use ($currentTime) {
-
-    // Keep menus without an expiry value
-    if (empty($menu['end_at'])) {
-        return true;
-    }
-
-    $expiryTime = strtotime($menu['end_at']);
-
-    // Hide menu if its expiry date/time has passed
-    if ($expiryTime !== false && $expiryTime < $currentTime) {
-        return false;
-    }
-
-    return true;
-}));
-/* =========================================================
-   PER-MENU DISCOUNT HELPER
-   ========================================================= */
-function getMenuDiscount(PDO $pdo, array $menu): ?array
-{
-    try {
-        $menuStart = strtotime($menu['start_at']);
-        $menuEnd   = strtotime($menu['end_at']);
-        $now       = time();
-        if ($now < $menuStart || $now > $menuEnd) return null;
-
-        $dStmt = $pdo->prepare(
-            "SELECT d.discount_code, d.discount_name,
-                    dt.slot_name, dt.start_time, dt.end_time,
-                    dt.amount_type, dt.discount_amount, dt.delivery_enabled
-             FROM discounts d
-             INNER JOIN discount_times dt ON dt.discount_code = d.discount_code
-             WHERE d.status = 1 AND d.discount_type = 'time'
-             ORDER BY dt.id ASC"
-        );
-        $dStmt->execute();
-        $slots = $dStmt->fetchAll(PDO::FETCH_ASSOC);
-
-        $prevEndEpoch = $menuStart;
-        $baseDay      = date('Y-m-d', $menuStart);
-
-        foreach ($slots as $s) {
-            $slotEndTs = strtotime($baseDay . ' ' . $s['end_time']);
-            if ($slotEndTs < $prevEndEpoch) $slotEndTs += 86400;
-            if ($now >= $prevEndEpoch && $now <= $slotEndTs) {
-                return [
-                    'name'        => $s['discount_name'],
-                    'slot_name'   => $s['slot_name'],
-                    'amount_type' => $s['amount_type'],
-                    'amount'      => (float)$s['discount_amount'],
-                    'delivery'    => (int)$s['delivery_enabled'],
-                ];
-            }
-            $prevEndEpoch = $slotEndTs;
-        }
-    } catch (PDOException $e) {
-    }
-    return null;
-}
-
-function discountBadgeText(?array $d): string
-{
-    if (!$d || $d['amount'] <= 0) return '';
-    return $d['amount_type'] === 'percent'
-        ? number_format($d['amount'], 0) . '% OFF'
-        : '₹' . number_format($d['amount'], 0) . ' OFF';
-}
-
-/* =========================================================
-   BUILD MENU PANELS
-   ========================================================= */
-$menuPanels = [];
-$globalCategories = []; // To hold categories for the single top section
-
-foreach ($activeMenus as $idx => $menu) {
-    $rawRows    = getMenuProducts($pdo, 500, $menu['menu_code']);
-    $products   = groupMenuProductsByProduct($rawRows);
-
-    // Grab categories only from the FIRST active menu for the single top section
-    if ($idx === 0) {
-        $globalCategories = getMenuCategories($pdo, 50, $menu['menu_code']);
-    }
-
-    $discount = getMenuDiscount($pdo, $menu);
-    $badge    = discountBadgeText($discount);
-
-    $label      = $idx === 0 ? "Today's Menu" : ($idx === 1 ? "Tomorrow's Menu" : $menu['menu_name']);
-    $shortLabel = $idx === 0 ? "Today" : ($idx === 1 ? "Tomorrow" : $menu['menu_name']);
-
-    $menuPanels[] = [
-        'menu'        => $menu,
-        'products'    => $products,
-        'discount'    => $discount,
-        'badge'       => $badge,
-        'label'       => $label,
-        'short_label' => $shortLabel,
-        'index'       => $idx
-    ];
-}
-
 /* ---------- CUSTOMER ---------- */
 $customerLoggedIn = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0;
 $customerRowId    = $customerLoggedIn ? (int)$_SESSION['customer_id'] : 0;
@@ -155,6 +48,17 @@ for ($i = 1; $i <= 4; $i++) {
     $b = $settings['banner_' . $i] ?? '';
     if (!empty($b)) $homeBanners[] = ADMIN_URL . $b;
 }
+
+/* =========================================================
+   LOAD ALL ACTIVE CATEGORIES (Limit to 8 for Homepage)
+   ========================================================= */
+$categories = [];
+try {
+    $stmt = $pdo->query("SELECT id, category_name, category_slug, category_image FROM categories WHERE status = 1 ORDER BY category_name ASC LIMIT 8");
+    $categories = $stmt->fetchAll();
+} catch (PDOException $e) {
+    $categories = [];
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -163,421 +67,44 @@ for ($i = 1; $i <= 4; $i++) {
     <?php include_once './includes/head_links.php'; ?>
 
     <style>
-        /* =====================================================
-           PRODUCT CARD — ALIGNED + COMPACT BUTTON
-           ===================================================== */
-        .mm-product {
-            background: #fff;
-            border: 1.5px solid #e8e1d8;
-            border-radius: 16px;
-            padding: 12px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            transition: border-color .2s ease, box-shadow .2s ease;
-            height: 100%;
-        }
+        .cat-grid-wrap { padding-top: 28px; padding-bottom: 60px; }
+        .cat-grid-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+        .cat-grid-header h2 { font-family: "Playfair Display", serif; font-size: 24px; font-weight: 700; color: #302923; margin: 0 0 4px; }
+        .cat-grid-header p { margin: 0; font-size: 12px; color: #817a71; }
+        .view-all-btn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; color: #b51f2c; text-decoration: none; padding: 8px 14px; background: #fff5f5; border: 1.5px solid #f3c8cc; border-radius: 10px; transition: 0.2s; white-space: nowrap; }
+        .view-all-btn:hover { background: #b51f2c; color: #fff; border-color: #b51f2c; }
+        
+        .cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px; }
+        .cat-box { background: #fff; border: 1.5px solid #ece5da; border-radius: 16px; overflow: hidden; text-decoration: none; display: flex; flex-direction: column; transition: all 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.2); box-shadow: 0 4px 12px rgba(48, 41, 35, 0.03); }
+        .cat-box:hover { transform: translateY(-4px); border-color: #d98a91; box-shadow: 0 10px 20px rgba(181, 31, 44, 0.08); }
+        
+        .cat-img { position: relative; width: 100%; padding-bottom: 80%; background: #fdfaf4; }
+        .cat-img img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+        .cat-img svg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 36%; height: 36%; color: #d5cbbd; }
+        
+        .cat-info { padding: 12px 10px; text-align: center; flex: 1; display: flex; flex-direction: column; justify-content: space-between; gap: 10px; }
+        .cat-name { font-size: 12.5px; font-weight: 800; color: #302923; margin: 0; line-height: 1.4; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .cat-btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; font-size: 10.5px; font-weight: 800; color: #b51f2c; text-transform: uppercase; letter-spacing: 0.05em; transition: 0.2s; }
+        .cat-box:hover .cat-btn { color: #8e1722; }
+        .cat-box:hover .cat-btn i { transform: translateX(3px); }
+        .cat-btn i { font-size: 12px; transition: transform 0.2s; }
 
-        .mm-product:hover {
-            border-color: #d98a91;
-            box-shadow: 0 6px 18px rgba(181, 31, 44, .08);
-        }
-
-        /* Link wrapper grows so button sits at bottom evenly */
-        .mm-product>a {
-            text-decoration: none;
-            display: block;
-            flex: 1;
-        }
-
-        .mm-product-img {
-            position: relative;
-            border-radius: 12px;
-            overflow: hidden;
-            aspect-ratio: 1 / 1;
-            background: #f7f2ec;
-        }
-
-        .mm-product-img img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            display: block;
-        }
-
-        .mm-product-img>svg {
-            width: 50%;
-            height: 50%;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            color: #d5cbbd;
-        }
-
-        .mm-product-name {
-            font-size: 13px;
-            font-weight: 800;
-            color: #302923;
-            margin: 2px 0 4px;
-            line-height: 1.3;
-            letter-spacing: .01em;
-            text-transform: uppercase;
-        }
-
-        /* ---------- MENU LABEL ---------- */
-        .mm-menu-label {
-            position: absolute;
-            top: 8px;
-            left: 8px;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 5px 10px;
-            border-radius: 999px;
-            font-size: 10px;
-            font-weight: 800;
-            letter-spacing: .05em;
-            text-transform: uppercase;
-            color: #fff;
-            z-index: 4;
-            backdrop-filter: blur(4px);
-            box-shadow: 0 2px 6px rgba(0, 0, 0, .15);
-        }
-
-        .mm-menu-label.today {
-            background: linear-gradient(135deg, #d42a3a, #b51f2c);
-        }
-
-        .mm-menu-label.tomorrow {
-            background: linear-gradient(135deg, #3b82f6, #1e40af);
-        }
-
-        .mm-menu-label.default {
-            background: #302923;
-        }
-
-        .mm-menu-label i {
-            font-size: 10px;
-        }
-
-        /* ---------- DISCOUNT BADGE ---------- */
-        .mm-discount-badge {
-            position: absolute;
-            bottom: 10px;
-            left: 10px;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 10px;
-            font-size: 11px;
-            font-weight: 900;
-            letter-spacing: .05em;
-            text-transform: uppercase;
-            color: #fff;
-            line-height: 1;
-            border-radius: 8px;
-            background: linear-gradient(145deg, #d42a3a 0%, #b51f2c 45%, #7a1220 100%);
-            box-shadow:
-                0 1px 0 rgba(255, 255, 255, .25) inset,
-                0 -1px 0 rgba(0, 0, 0, .25) inset,
-                0 2px 0 #5c0d18,
-                0 4px 8px rgba(181, 31, 44, .4);
-            transform: rotate(-3deg);
-            z-index: 3;
-            text-shadow: 0 1px 0 rgba(0, 0, 0, .35);
-        }
-
-        .mm-discount-badge::before {
-            content: "";
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: radial-gradient(circle at 30% 30%, #fff5c0, #ffd966 60%, #b8893c);
-            box-shadow: 0 0 5px rgba(255, 217, 102, .9);
-            display: inline-block;
-            flex-shrink: 0;
-        }
-
-        /* ---------- VARIANTS ---------- */
-        .mm-variants {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            margin-bottom: 4px;
-            min-height: 30px;
-        }
-
-        .mm-variants-loading {
-            font-size: 11px;
-            color: #948c82;
-            padding: 6px 0;
-            text-align: center;
-        }
-
-        .mm-variant-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 6px;
-        }
-
-        .mm-variant-label {
-            font-size: 10px;
-            font-weight: 800;
-            color: #302923;
-            text-transform: uppercase;
-            letter-spacing: .04em;
-            line-height: 1.2;
-            flex: 1;
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        /* ---------- QTY STEPPER ---------- */
-        .mm-qty {
-            display: inline-flex;
-            align-items: center;
-            border: 1.5px solid #b51f2c;
-            border-radius: 6px;
-            overflow: hidden;
-            height: 24px;
-            background: #fff;
-            flex-shrink: 0;
-        }
-
-        .mm-qty button {
-            width: 20px;
-            height: 100%;
-            border: 0;
-            background: transparent;
-            color: #b51f2c;
-            font-size: 13px;
-            font-weight: 800;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 0;
-            line-height: 1;
-            transition: background .15s ease;
-        }
-
-        .mm-qty button:hover:not(:disabled) {
-            background: #fdecec;
-        }
-
-        .mm-qty button:disabled {
-            opacity: .35;
-            cursor: not-allowed;
-        }
-
-        .mm-qty-val {
-            min-width: 20px;
-            text-align: center;
-            font-size: 11px;
-            font-weight: 800;
-            color: #b51f2c;
-            padding: 0 2px;
-            border-left: 1.5px solid #b51f2c;
-            border-right: 1.5px solid #b51f2c;
-            height: 100%;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            background: #fff5f5;
-        }
-
-        .mm-variant-price {
-            font-size: 11.5px;
-            font-weight: 800;
-            color: #302923;
-            flex-shrink: 0;
-            min-width: 48px;
-            text-align: right;
-        }
-
-        /* ---------- ADD TO CART (COMPACT + CENTERED) ---------- */
-        .mm-add-btn {
-            margin-top: auto;
-            width: 100%;
-            max-width: 160px;
-            align-self: center;
-            padding: 7px 12px;
-            border: 1.5px solid #b51f2c;
-            background: #b51f2c;
-            color: #fff;
-            border-radius: 8px;
-            font-size: 10.5px;
-            font-weight: 800;
-            text-transform: uppercase;
-            letter-spacing: .05em;
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 5px;
-            transition: .18s ease;
-            line-height: 1;
-        }
-
-        /* Only image is clickable — keep it block-level */
-        .mm-product-img-link {
-            display: block;
-            text-decoration: none;
-        }
-
-        .mm-product-img-link .mm-product-img {
-            display: block;
-        }
-
-        .mm-add-btn:hover:not(:disabled) {
-            background: #8e1722;
-            border-color: #8e1722;
-        }
-
-        .mm-add-btn:disabled {
-            opacity: .45;
-            cursor: not-allowed;
-            background: #d8d2c9;
-            border-color: #d8d2c9;
-        }
-
-        .mm-add-btn.adding {
-            pointer-events: none;
-            opacity: .7;
-        }
-
-        .mm-add-btn svg {
-            stroke: currentColor;
-            width: 13px;
-            height: 13px;
-            flex-shrink: 0;
-        }
-
-        /* ---------- MENU PANEL ---------- */
-        .mm-menu-panel {
-            margin-top: 48px;
-        }
-
-        .mm-menu-panel-head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 16px 20px;
-            background: #fff;
-            border: 1.5px solid #eee7dc;
-            border-radius: 14px;
-            margin-bottom: 20px;
-        }
-
-        .mm-menu-panel-head h2 {
-            margin: 0;
-            font-size: 20px;
-            font-weight: 800;
-            color: #302923;
-            font-family: "Playfair Display", serif;
-        }
-
-        .mm-menu-panel-head .sub {
-            display: block;
-            margin-top: 3px;
-            font-size: 12px;
-            color: #817a71;
-        }
-
-        .mm-menu-panel-head .badge {
-            background: #b51f2c;
-            color: #fff;
-            padding: 6px 14px;
-            border-radius: 999px;
-            font-size: 11px;
-            font-weight: 800;
-            text-transform: uppercase;
-            letter-spacing: .06em;
-            white-space: nowrap;
-        }
-
-        /* ---------- PRODUCTS GRID (ALIGNED) ---------- */
-        .mm-products {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-            gap: 14px;
-            align-items: stretch;
-        }
-
-        .mm-empty {
-            text-align: center;
-            padding: 40px 20px;
-            color: #948c82;
-            font-size: 13px;
-        }
-
-        /* ---------- RESPONSIVE ---------- */
         @media (max-width: 768px) {
-            .mm-products {
-                grid-template-columns: repeat(2, 1fr);
-                gap: 10px;
-            }
-
-            .mm-product {
-                padding: 9px;
-                gap: 6px;
-            }
-
-            .mm-product-name {
-                font-size: 11.5px;
-            }
-
-            .mm-variant-label {
-                font-size: 9.5px;
-            }
-
-            .mm-variant-price {
-                font-size: 11px;
-                min-width: 42px;
-            }
-
-            .mm-add-btn {
-                max-width: 100%;
-                padding: 6px 10px;
-                font-size: 9.5px;
-                gap: 4px;
-            }
-
-            .mm-add-btn svg {
-                width: 11px;
-                height: 11px;
-            }
-
-            .mm-menu-label {
-                font-size: 9px;
-                padding: 4px 8px;
-            }
-
-            .mm-discount-badge {
-                font-size: 10px;
-                padding: 5px 8px;
-            }
+            .cat-grid { grid-template-columns: repeat(3, 1fr); gap: 10px; }
+            .cat-img { padding-bottom: 85%; }
+            .cat-info { padding: 10px 6px; }
+            .cat-name { font-size: 11px; }
+            .cat-btn { font-size: 9.5px; }
+            .cat-grid-header h2 { font-size: 20px; }
+            .view-all-btn { padding: 6px 10px; font-size: 11px; }
         }
-
-        @media (max-width: 380px) {
-            .mm-products {
-                grid-template-columns: repeat(2, 1fr);
-                gap: 8px;
-            }
-
-            .mm-product {
-                padding: 8px;
-            }
-
-            .mm-add-btn {
-                font-size: 9px;
-                padding: 6px 8px;
-            }
+        @media (max-width: 480px) {
+            .cat-grid { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+            .cat-name { font-size: 10px; }
+            .cat-btn { font-size: 9px; }
+            .cat-btn i { display: none; }
+            .view-all-btn span { display: none; }
+            .view-all-btn i { font-size: 16px; margin: 0; }
         }
     </style>
 </head>
@@ -587,44 +114,32 @@ for ($i = 1; $i <= 4; $i++) {
     <?php include_once './includes/nav-bar.php'; ?>
 
     <main class="mm-main">
-        <!-- ✅ Banner and Offer Images stay here -->
         <?php include_once './includes/home-banners.php'; ?>
         <?php include_once './includes/menu-day-image.php'; ?>
 
         <div class="mm-container">
+            <section class="cat-grid-wrap">
 
-            <!-- ✅ SINGLE "Shop by Category" Section (Shown only once) -->
-            <?php if (!empty($globalCategories)): ?>
-                <section style="padding-top:28px;">
-                    <div class="mm-section-head">
-                        <div>
-                            <h2 class="mm-section-title">Shop by Category</h2>
-                            <p class="mm-section-sub">Explore our range</p>
-                        </div>
-                        <?php if (count($globalCategories) > 4): ?>
-                            <div class="mm-cat-nav">
-                                <button onclick="scrollCategories(-250)" class="mm-cat-btn" aria-label="Previous">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
-                                        <path d="M15 18l-6-6 6-6" />
-                                    </svg>
-                                </button>
-                                <button onclick="scrollCategories(250)" class="mm-cat-btn" aria-label="Next">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
-                                        <path d="M9 6l6 6-6 6" />
-                                    </svg>
-                                </button>
-                            </div>
-                        <?php endif; ?>
+                <div class="cat-grid-header">
+                    <div>
+                        <h2>Shop by Category</h2>
+                        <p>Explore our range of fresh & traditional products</p>
                     </div>
+                    <a href="all-categories.php" class="view-all-btn">
+                        <i class="bi bi-grid-3x3-gap-fill"></i> <span>View All</span>
+                    </a>
+                </div>
 
-                    <div id="categoryScroll" class="mm-cat-scroll">
-                        <?php foreach ($globalCategories as $c):
+                <?php if (!empty($categories)): ?>
+                    <div class="cat-grid">
+                        <?php foreach ($categories as $c):
                             $cimg = categoryImageUrl($c['category_image'] ?? '');
                         ?>
-                            <a href="category.php?slug=<?= urlencode($c['category_slug']) ?>" class="mm-cat-card">
-                                <div class="mm-cat-img">
+                            <!-- ✅ FIXED: Links directly to category.php with the specific slug -->
+                            <a href="category.php?slug=<?= urlencode($c['category_slug']) ?>" class="cat-box">
+                                <div class="cat-img">
                                     <?php if ($cimg): ?>
-                                        <img src="<?= htmlspecialchars($cimg) ?>" alt="">
+                                        <img src="<?= htmlspecialchars($cimg) ?>" alt="<?= htmlspecialchars($c['category_name']) ?>">
                                     <?php else: ?>
                                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                                             <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" />
@@ -633,124 +148,24 @@ for ($i = 1; $i <= 4; $i++) {
                                         </svg>
                                     <?php endif; ?>
                                 </div>
-                                <p class="mm-cat-name"><?= htmlspecialchars($c['category_name']) ?></p>
+                                <div class="cat-info">
+                                    <h3 class="cat-name"><?= htmlspecialchars($c['category_name']) ?></h3>
+                                    <span class="cat-btn">View <i class="bi bi-arrow-right"></i></span>
+                                </div>
                             </a>
                         <?php endforeach; ?>
                     </div>
-                </section>
-            <?php endif; ?>
-
-
-            <!-- ✅ MULTIPLE MENU PANELS (Today / Tomorrow) -->
-            <?php if (!empty($menuPanels)): ?>
-
-                <?php foreach ($menuPanels as $panel): ?>
-                    <?php
-                    $menu     = $panel['menu'];
-                    $products = $panel['products'];
-                    $badge    = $panel['badge'];
-                    $label    = $panel['label'];
-                    $shortLbl = $panel['short_label'];
-                    $idx      = $panel['index'];
-
-                    if ($idx === 0) {
-                        $labelClass = 'today';
-                        $labelIcon = 'bi bi-fire';
-                    } elseif ($idx === 1) {
-                        $labelClass = 'tomorrow';
-                        $labelIcon = 'bi bi-sunrise';
-                    } else {
-                        $labelClass = 'default';
-                        $labelIcon = 'bi bi-grid';
-                    }
-                    ?>
-
-                    <section class="mm-menu-panel" data-menu-code="<?= htmlspecialchars($menu['menu_code']) ?>">
-
-                        <!-- PANEL HEADER -->
-                        <div class="mm-menu-panel-head">
-                            <div>
-                                <h2><?= htmlspecialchars($label) ?></h2>
-                                <span class="sub"><?= htmlspecialchars($menu['menu_name']) ?></span>
-                            </div>
-                            <?php if ($badge): ?>
-                                <span class="badge"><?= htmlspecialchars($badge) ?></span>
-                            <?php endif; ?>
+                <?php else: ?>
+                    <div style="text-align: center; padding: 60px 20px;">
+                        <div style="width: 80px; height: 80px; border-radius: 50%; background: #fdfaf4; color: #b8893c; display: inline-flex; align-items: center; justify-content: center; font-size: 32px; margin-bottom: 16px;">
+                            <i class="bi bi-box-seam"></i>
                         </div>
-
-                        <!-- PRODUCTS -->
-                        <div class="mm-products">
-                            <?php foreach ($products as $p):
-                                $img = productImageUrl($p['product_image'] ?? '');
-                            ?>
-                                <div class="mm-product js-product-card"
-                                    data-product-id="<?= (int)$p['id'] ?>"
-                                    data-menu-code="<?= htmlspecialchars($menu['menu_code']) ?>">
-
-                                    <!-- ONLY IMAGE IS CLICKABLE -->
-                                    <a href="product.php?id=<?= (int)$p['id'] ?>" class="mm-product-img-link">
-                                        <div class="mm-product-img">
-                                            <?php if ($img): ?>
-                                                <img src="<?= htmlspecialchars($img) ?>" alt="">
-                                            <?php else: ?>
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                                                    <path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-                                                    <path d="M3.3 7L12 12l8.7-5" />
-                                                    <path d="M12 22V12" />
-                                                </svg>
-                                            <?php endif; ?>
-
-                                            <span class="mm-menu-label <?= $labelClass ?>">
-                                                <i class="<?= $labelIcon ?>"></i>
-                                                <?= htmlspecialchars($shortLbl) ?>
-                                            </span>
-
-                                            <?php if ($badge): ?>
-                                                <span class="mm-discount-badge"><?= htmlspecialchars($badge) ?></span>
-                                            <?php endif; ?>
-                                        </div>
-                                    </a>
-
-                                    <h3 class="mm-product-name"><?= htmlspecialchars($p['product_name']) ?></h3>
-
-                                    <div class="mm-variants" data-loaded="0">
-                                        <div class="mm-variants-loading">Loading variants…</div>
-                                    </div>
-
-                                    <button type="button"
-                                        class="mm-add-btn js-add-cart"
-                                        data-product-id="<?= (int)$p['id'] ?>"
-                                        data-menu-code="<?= htmlspecialchars($menu['menu_code']) ?>"
-                                        disabled>
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                            <circle cx="9" cy="20" r="1.5" />
-                                            <circle cx="18" cy="20" r="1.5" />
-                                            <path d="M2 3h2l2.4 12.2a2 2 0 0 0 2 1.8h8.7a2 2 0 0 0 2-1.6L21 7H5" />
-                                        </svg>
-                                        <span>Add to Cart</span>
-                                    </button>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-
-                    </section>
-                <?php endforeach; ?>
-
-            <?php else: ?>
-                <section style="padding-top:40px; padding-bottom:120px;">
-                    <div class="mm-empty">
-                        <div class="mm-empty-icon">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <circle cx="12" cy="12" r="9" />
-                                <path d="M12 7v5l3 2" />
-                            </svg>
-                        </div>
-                        <h3>No menu available right now</h3>
-                        <p>Our menu opens at scheduled times.<br>Please check back soon for today's fresh selection.</p>
+                        <h3 style="font-family: 'Playfair Display', serif; font-size: 20px; color: #302923; margin: 0 0 8px;">No categories yet</h3>
+                        <p style="color: #817a71; font-size: 13px;">Please check back later, we are adding new items.</p>
                     </div>
-                </section>
-            <?php endif; ?>
+                <?php endif; ?>
 
+            </section>
         </div>
     </main>
 
@@ -774,17 +189,6 @@ for ($i = 1; $i <= 4; $i++) {
             name: "<?= htmlspecialchars($customerName,   ENT_QUOTES) ?>",
             mobile: "<?= htmlspecialchars($customerMobile, ENT_QUOTES) ?>"
         };
-    </script>
-
-    <script>
-        function scrollCategories(amount) {
-            const container = document.getElementById("categoryScroll");
-            if (!container) return;
-            container.scrollBy({
-                left: amount,
-                behavior: "smooth"
-            });
-        }
     </script>
 
     <script src="<?= MAIN_URL ?>js/home.js"></script>

@@ -72,7 +72,7 @@ $todayOfferImg = !empty($settings['today_offer_image'])
     : '';
 
 // =====================================================
-// FETCH PRODUCTS & CATEGORIES
+// FETCH PRODUCTS & CATEGORIES (today menu only)
 // =====================================================
 $rawRows = getMenuProducts($pdo, 500, $todayMenuCode);
 
@@ -314,6 +314,125 @@ if ($customerRowId > 0) {
             text-transform: uppercase;
             letter-spacing: .06em;
             white-space: nowrap;
+        }
+
+        /* =====================================================
+           CATEGORY STRIP (menu categories)
+           ===================================================== */
+        .mm-cat-strip-wrap {
+            padding: 8px 0 24px;
+            border-bottom: 1.5px solid #eee7dc;
+            margin-bottom: 8px;
+        }
+
+        .mm-cat-strip-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .mm-cat-strip-head h2 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 800;
+            color: #302923;
+            font-family: "Playfair Display", serif;
+        }
+
+        .mm-cat-strip-head p {
+            margin: 2px 0 0;
+            font-size: 12px;
+            color: #817a71;
+        }
+
+        .mm-cat-strip {
+            display: flex;
+            gap: 12px;
+            overflow-x: auto;
+            padding-bottom: 6px;
+            scrollbar-width: thin;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .mm-cat-strip::-webkit-scrollbar {
+            height: 6px;
+        }
+
+        .mm-cat-strip::-webkit-scrollbar-thumb {
+            background: #e8e1d8;
+            border-radius: 999px;
+        }
+
+        .mm-cat-card {
+            flex: 0 0 auto;
+            width: 110px;
+            text-decoration: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            transition: transform .18s ease;
+        }
+
+        .mm-cat-card:hover {
+            transform: translateY(-3px);
+        }
+
+        .mm-cat-card-img {
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            border-radius: 16px;
+            overflow: hidden;
+            background: #f7f2ec;
+            border: 1.5px solid #e8e1d8;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .mm-cat-card:hover .mm-cat-card-img {
+            border-color: #d98a91;
+            box-shadow: 0 6px 14px rgba(181, 31, 44, .08);
+        }
+
+        .mm-cat-card-img img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .mm-cat-card-img svg {
+            width: 40%;
+            height: 40%;
+            color: #d5cbbd;
+        }
+
+        .mm-cat-card-name {
+            font-size: 11.5px;
+            font-weight: 800;
+            color: #302923;
+            text-align: center;
+            line-height: 1.3;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            margin: 0;
+        }
+
+        @media (max-width: 480px) {
+            .mm-cat-card {
+                width: 92px;
+            }
+
+            .mm-cat-card-name {
+                font-size: 10.5px;
+            }
         }
 
         /* =====================================================
@@ -679,6 +798,45 @@ if ($customerRowId > 0) {
         <?php endif; ?>
 
         <div class="mm-container">
+
+            <!-- ================================================================
+                 MENU CATEGORIES STRIP — CLICKABLE TO menu-category.php?slug=...
+                 ================================================================ -->
+            <?php if (!empty($categories)): ?>
+                <section class="mm-cat-strip-wrap">
+                    <div class="mm-cat-strip-head">
+                        <div>
+                            <h2>Shop by Category</h2>
+                            <p>Today's menu categories</p>
+                        </div>
+                    </div>
+
+                    <div class="mm-cat-strip">
+                        <?php foreach ($categories as $c):
+                            $cimg  = categoryImageUrl($c['category_image'] ?? '');
+                            $slug  = $c['category_slug'] ?? '';
+                        ?>
+                            <a href="menu-category.php?slug=<?= urlencode($slug) ?>&menu=<?= urlencode($todayMenuCode) ?>"
+                                class="mm-cat-card"
+                                title="<?= htmlspecialchars($c['category_name']) ?>">
+                                <div class="mm-cat-card-img">
+                                    <?php if ($cimg): ?>
+                                        <img src="<?= htmlspecialchars($cimg) ?>" alt="<?= htmlspecialchars($c['category_name']) ?>">
+                                    <?php else: ?>
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" />
+                                            <path d="M3 6h18" />
+                                            <path d="M16 10a4 4 0 0 1-8 0" />
+                                        </svg>
+                                    <?php endif; ?>
+                                </div>
+                                <p class="mm-cat-card-name"><?= htmlspecialchars($c['category_name']) ?></p>
+                            </a>
+                        <?php endforeach; ?>
+                    </div>
+                </section>
+            <?php endif; ?>
+
             <!-- Page Header -->
             <div class="mm-page-header">
                 <div>

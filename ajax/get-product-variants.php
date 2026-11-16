@@ -1,6 +1,6 @@
 <?php
 /* =========================================================
-   MRS MILL@ — GET PRODUCT VARIANTS (per menu)
+   MRS MILL@ — GET PRODUCT VARIANTS (per menu, WITH STOCK)
    File: ./ajax/get-product-variants.php
    Params: id, menu_code (optional)
    ========================================================= */
@@ -30,10 +30,17 @@ try {
     $product = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$product) jsonResponse(false, 'Product not found.');
 
-    /* If menu_code given, restrict variants to that menu */
+    /* =========================================================
+       VARIANTS + STOCK
+       - If menu_code given, restrict to that menu and pull
+         stock_unlimited / stock_count from menu_products
+       - Otherwise return unlimited stock (no menu context)
+       ========================================================= */
     if ($menuCode !== '') {
         $vStmt = $pdo->prepare(
-            "SELECT v.id, v.quantity, v.quantity_unit, v.quantity_name, v.price
+            "SELECT v.id, v.quantity, v.quantity_unit, v.quantity_name, v.price,
+                    COALESCE(mp.stock_unlimited, 0) AS stock_unlimited,
+                    COALESCE(mp.stock_count,     0) AS stock_count
              FROM product_variants v
              INNER JOIN menu_products mp ON mp.variant_id = v.id
              WHERE v.product_code = ?
@@ -44,7 +51,8 @@ try {
         $vStmt->execute([$product['product_code'], $menuCode]);
     } else {
         $vStmt = $pdo->prepare(
-            "SELECT id, quantity, quantity_unit, quantity_name, price
+            "SELECT id, quantity, quantity_unit, quantity_name, price,
+                    1 AS stock_unlimited, 9999 AS stock_count
              FROM product_variants
              WHERE product_code = ? AND status = 1
              ORDER BY quantity ASC"
@@ -53,7 +61,7 @@ try {
     }
     $variants = $vStmt->fetchAll(PDO::FETCH_ASSOC);
 
-    /* cart quantities */
+    /* cart quantities (menu-scoped when menu_code provided) */
     $cartQtyByVariant = [];
     if ($customerRowId > 0) {
         if ($menuCode !== '') {
@@ -91,9 +99,13 @@ try {
 
     foreach ($variants as &$v) {
         $vid = (int)$v['id'];
-        $v['cart_qty'] = $cartQtyByVariant[$vid] ?? 0;
-        $v['in_cart']  = $v['cart_qty'] > 0;
-        $v['price']    = (float)$v['price'];
+        $v['id']              = $vid;
+        $v['cart_qty']        = $cartQtyByVariant[$vid] ?? 0;
+        $v['in_cart']         = $v['cart_qty'] > 0;
+        $v['price']           = (float)$v['price'];
+        $v['quantity']        = (float)$v['quantity'];
+        $v['stock_unlimited'] = (int)$v['stock_unlimited'];
+        $v['stock_count']     = (int)$v['stock_count'];
     }
     unset($v);
 
@@ -105,7 +117,6 @@ try {
         'menu_code'     => $menuCode,
         'variants'      => $variants
     ]);
-
 } catch (PDOException $e) {
     jsonResponse(false, 'Server error: ' . $e->getMessage());
 }

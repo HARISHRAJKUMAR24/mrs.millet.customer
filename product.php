@@ -14,76 +14,7 @@ if ($productId <= 0) {
     header('Location: index.php');
     exit;
 }
-// 1. GET PRODUCT ID
-$productId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
-if ($productId <= 0) {
-    header('Location: index.php');
-    exit;
-}
-
-// 2. FETCH PRODUCT FIRST
-$stmt = $pdo->prepare("
-    SELECT p.*, c.category_name, c.category_slug, c.category_image
-    FROM products p
-    LEFT JOIN categories c ON c.id = p.category_id
-    WHERE p.id = ? AND p.status = 1
-    LIMIT 1
-");
-
-$stmt->execute([$productId]);
-$product = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$product) {
-    header('Location: index.php');
-    exit;
-}
-
-// 3. INITIALIZE MENU VARIABLES
-$activeMenus = getActiveMenus($pdo);
-$productMenu = null;
-$menuDiscount = null;
-$badgeText = '';
-
-// 4. DEFINE getMenuDiscount() FUNCTION HERE
-// Keep your existing function exactly once.
-
-// 5. CHECK PRODUCT MENU
-foreach ($activeMenus as $menu) {
-
-    $mStmt = $pdo->prepare("
-        SELECT id
-        FROM menu_products
-        WHERE menu_code = ?
-        AND product_code = ?
-        LIMIT 1
-    ");
-
-    $mStmt->execute([
-        $menu['menu_code'],
-        $product['product_code']
-    ]);
-
-    if ($mStmt->fetch()) {
-
-        $productMenu = $menu;
-        $menuDiscount = getMenuDiscount($pdo, $menu);
-
-        if ($menuDiscount && $menuDiscount['amount'] > 0) {
-            $badgeText = $menuDiscount['amount_type'] === 'percent'
-                ? number_format($menuDiscount['amount'], 0) . '% OFF'
-                : '₹' . number_format($menuDiscount['amount'], 0) . ' OFF';
-        }
-
-        break;
-    }
-}
-
-// 6. REDIRECT IF PRODUCT HAS NO ACTIVE MENU
-if (!$productMenu) {
-    header('Location: index.php');
-    exit;
-}
 /* ---------- FETCH PRODUCT ---------- */
 try {
     $stmt = $pdo->prepare(
@@ -105,22 +36,20 @@ try {
     exit;
 }
 
-
-/* ---------- FIND WHICH MENU IT BELONGS TO ---------- */
-$activeMenus = getActiveMenus($pdo);
-$productMenu = null;
+/* =========================================================
+   FIND WHICH ACTIVE MENU CONTAINS THIS PRODUCT
+   ========================================================= */
+$activeMenus  = getActiveMenus($pdo);
+$productMenu  = null;
 $menuDiscount = null;
-$badgeText = '';
+$badgeText    = '';
 
-// Function to get discount for a menu (Requires start_at and end_at)
+/* Per-menu discount helper */
 function getMenuDiscount(PDO $pdo, array $menu): ?array
 {
-    try {
-        // Prevent error if start_at/end_at are missing
-        if (!isset($menu['start_at']) || !isset($menu['end_at'])) {
-            return null;
-        }
+    if (!isset($menu['start_at']) || !isset($menu['end_at'])) return null;
 
+    try {
         $menuStart = strtotime($menu['start_at']);
         $menuEnd   = strtotime($menu['end_at']);
         $now       = time();
@@ -160,103 +89,143 @@ function getMenuDiscount(PDO $pdo, array $menu): ?array
     return null;
 }
 
-// Check which active menu contains this product
-foreach ($activeMenus as $menu) {
-    $mStmt = $pdo->prepare("SELECT id FROM menu_products WHERE menu_code = ? AND product_code = ? LIMIT 1");
-    $mStmt->execute([$menu['menu_code'], $product['product_code']]);
-    if ($mStmt->fetch()) {
-        $productMenu = $menu;
-        $menuDiscount = getMenuDiscount($pdo, $menu);
-        if ($menuDiscount && $menuDiscount['amount'] > 0) {
-            $badgeText = $menuDiscount['amount_type'] === 'percent'
-                ? number_format($menuDiscount['amount'], 0) . '% OFF'
-                : '₹' . number_format($menuDiscount['amount'], 0) . ' OFF';
+/* Scan active menus for this product */
+if (!empty($activeMenus)) {
+    foreach ($activeMenus as $menu) {
+        try {
+            $mStmt = $pdo->prepare(
+                "SELECT id FROM menu_products WHERE menu_code = ? AND product_code = ? LIMIT 1"
+            );
+            $mStmt->execute([$menu['menu_code'], $product['product_code']]);
+            if ($mStmt->fetch()) {
+                $productMenu  = $menu;
+                $menuDiscount = getMenuDiscount($pdo, $menu);
+                if ($menuDiscount && $menuDiscount['amount'] > 0) {
+                    $badgeText = $menuDiscount['amount_type'] === 'percent'
+                        ? number_format($menuDiscount['amount'], 0) . '% OFF'
+                        : '₹' . number_format($menuDiscount['amount'], 0) . ' OFF';
+                }
+                break;
+            }
+        } catch (PDOException $e) {
         }
-        break; // Found the menu
     }
 }
 
-/* ---------- FETCH ALL VARIANTS ---------- */
-$vStmt = $pdo->prepare(
-    "SELECT id, quantity, quantity_unit, quantity_name, price, container_enabled, container_price
-     FROM product_variants
-     WHERE product_code = ? AND status = 1
-     ORDER BY quantity ASC"
-);
-$vStmt->execute([$product['product_code']]);
-$variants = $vStmt->fetchAll(PDO::FETCH_ASSOC);
+$menuCode     = $productMenu ? $productMenu['menu_code'] : '';
+$canAddToCart = !empty($productMenu);
 
-/* ---------- FETCH CART QTY FOR VARIANTS ---------- */
+/* =========================================================
+   FETCH VARIANTS
+   ========================================================= */
+$variants = [];
+try {
+    $vStmt = $pdo->prepare(
+        "SELECT id, quantity, quantity_unit, quantity_name, price, container_enabled, container_price
+         FROM product_variants
+         WHERE product_code = ? AND status = 1
+         ORDER BY quantity ASC"
+    );
+    $vStmt->execute([$product['product_code']]);
+    $variants = $vStmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $variants = [];
+}
+
+/* =========================================================
+   FETCH STOCK PER VARIANT (from menu_products)
+   ========================================================= */
+$stockByVariant   = []; // variant_id => ['unlimited' => bool, 'count' => int]
+$soldOutByVariant = []; // variant_id => bool
+
+if ($canAddToCart && !empty($variants)) {
+    try {
+        $sStmt = $pdo->prepare(
+            "SELECT variant_id, stock_unlimited, stock_count
+             FROM menu_products
+             WHERE menu_code = ? AND product_code = ?"
+        );
+        $sStmt->execute([$menuCode, $product['product_code']]);
+        foreach ($sStmt->fetchAll(PDO::FETCH_ASSOC) as $s) {
+            $stockByVariant[(int)$s['variant_id']] = [
+                'unlimited' => (int)$s['stock_unlimited'] === 1,
+                'count'     => (int)$s['stock_count'],
+            ];
+        }
+    } catch (PDOException $e) {
+        $stockByVariant = [];
+    }
+}
+
+foreach ($variants as $v) {
+    $vid = (int)$v['id'];
+    $s   = $stockByVariant[$vid] ?? null;
+    if (!$s) {
+        $soldOutByVariant[$vid] = false; // no stock row → available
+    } else {
+        $soldOutByVariant[$vid] = (!$s['unlimited'] && $s['count'] <= 0);
+    }
+}
+
+/* =========================================================
+   CART QTY PER VARIANT (only if in menu / can add to cart)
+   ========================================================= */
 $customerRowId = isset($_SESSION['customer_id']) && (int)$_SESSION['customer_id'] > 0
     ? (int)$_SESSION['customer_id'] : 0;
-$menuCode = $productMenu ? $productMenu['menu_code'] : '';
+
 $cartQtyByVariant = [];
 
-if ($customerRowId > 0) {
-    // Ignore menu_code here so it ALWAYS pre-fills the existing cart qty
-    $cq = $pdo->prepare(
-        "SELECT variant_id, SUM(qty) AS q
-         FROM customer_cart
-         WHERE customer_id = ? AND product_id = ?
-         GROUP BY variant_id"
-    );
-    $cq->execute([$customerRowId, $productId]);
-    while ($row = $cq->fetch(PDO::FETCH_ASSOC)) {
-        $cartQtyByVariant[(int)$row['variant_id']] = (int)$row['q'];
-    }
-} else {
-    if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
-        foreach ($_SESSION['cart'] as $g) {
-            if ((int)($g['product_id'] ?? 0) !== $productId) continue;
-
-            // Ignore menu check for guest session so it pre-fills
-            $vid = (int)($g['variant_id'] ?? 0);
-            if ($vid > 0) {
-                $cartQtyByVariant[$vid] = ($cartQtyByVariant[$vid] ?? 0) + (int)($g['qty'] ?? 0);
+if ($canAddToCart) {
+    if ($customerRowId > 0) {
+        try {
+            $cq = $pdo->prepare(
+                "SELECT variant_id, SUM(qty) AS q
+                 FROM customer_cart
+                 WHERE customer_id = ? AND product_id = ?
+                 GROUP BY variant_id"
+            );
+            $cq->execute([$customerRowId, $productId]);
+            while ($row = $cq->fetch(PDO::FETCH_ASSOC)) {
+                $cartQtyByVariant[(int)$row['variant_id']] = (int)$row['q'];
+            }
+        } catch (PDOException $e) {
+        }
+    } else {
+        if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
+            foreach ($_SESSION['cart'] as $g) {
+                if ((int)($g['product_id'] ?? 0) !== $productId) continue;
+                $vid = (int)($g['variant_id'] ?? 0);
+                if ($vid > 0) {
+                    $cartQtyByVariant[$vid] = ($cartQtyByVariant[$vid] ?? 0) + (int)($g['qty'] ?? 0);
+                }
             }
         }
     }
 }
 
-/* ---------- FETCH RANDOM RELATED PRODUCTS (WITHOUT DUPLICATES) ---------- */
+/* Helper: format quantity like "650 gram" */
+function fmtQty($qty, $unit): string
+{
+    $n = rtrim(rtrim(number_format((float)$qty, 2, '.', ''), '0'), '.');
+    return trim($n . ' ' . $unit);
+}
+
+/* =========================================================
+   RELATED PRODUCTS (same category, no menu logic)
+   ========================================================= */
 $relatedProducts = [];
-if ($productMenu) {
-    // Use GROUP BY to prevent duplicate products showing up twice
-    // We fetch the full menu info so we can pass it to getMenuDiscount()
+try {
     $rStmt = $pdo->prepare(
-        "SELECT p.id, p.product_name, p.product_image, c.category_name,
-                MIN(mp.menu_code) as menu_code, MIN(m.menu_name) as menu_name,
-                MIN(m.start_at) as start_at, MIN(m.end_at) as end_at
-         FROM menu_products mp
-         INNER JOIN products p ON p.product_code = mp.product_code
-         INNER JOIN menus m ON m.menu_code = mp.menu_code
-         LEFT JOIN categories c ON c.id = p.category_id
-         WHERE mp.menu_code = ? AND p.id != ? AND p.status = 1
-         GROUP BY p.id
+        "SELECT p.id, p.product_name, p.product_image
+         FROM products p
+         WHERE p.category_id = ? AND p.id != ? AND p.status = 1
          ORDER BY RAND()
          LIMIT 4"
     );
-    $rStmt->execute([$productMenu['menu_code'], $productId]);
-    $rawRelated = $rStmt->fetchAll(PDO::FETCH_ASSOC);
-
-    // Now attach the discount badge for each related product's menu
-    foreach ($rawRelated as $rp) {
-        // Find the discount for THIS specific menu by passing the full row (which has start_at & end_at)
-        $relDiscount = getMenuDiscount($pdo, $rp);
-        $relBadge = '';
-        if ($relDiscount && $relDiscount['amount'] > 0) {
-            $relBadge = $relDiscount['amount_type'] === 'percent'
-                ? number_format($relDiscount['amount'], 0) . '% OFF'
-                : '₹' . number_format($relDiscount['amount'], 0) . ' OFF';
-        }
-
-        $rp['rel_discount_badge'] = $relBadge;
-        $rp['rel_label_class']    = ($rp['menu_code'] === $productMenu['menu_code']) ? 'today' : 'tomorrow';
-        $rp['rel_label_text']     = ($rp['menu_code'] === $productMenu['menu_code']) ? 'Today' : 'Tomorrow';
-        $rp['rel_icon']           = ($rp['menu_code'] === $productMenu['menu_code']) ? 'bi bi-fire' : 'bi bi-sunrise';
-
-        $relatedProducts[] = $rp;
-    }
+    $rStmt->execute([$product['category_id'], $productId]);
+    $relatedProducts = $rStmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $relatedProducts = [];
 }
 
 /* ---------- CUSTOMER ---------- */
@@ -282,13 +251,11 @@ if ($customerRowId > 0) {
         $cartTotal = (float)($row['t'] ?? 0);
     } catch (PDOException $e) {
     }
-} else {
-    if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
-        foreach ($_SESSION['cart'] as $c) {
-            $q = (int)($c['qty'] ?? 0);
-            $cartCount += $q;
-            $cartTotal += ((float)($c['price'] ?? 0)) * $q;
-        }
+} else if (!empty($_SESSION['cart']) && is_array($_SESSION['cart'])) {
+    foreach ($_SESSION['cart'] as $c) {
+        $q = (int)($c['qty'] ?? 0);
+        $cartCount += $q;
+        $cartTotal += ((float)($c['price'] ?? 0)) * $q;
     }
 }
 ?>
@@ -298,9 +265,34 @@ if ($customerRowId > 0) {
 <head>
     <?php include_once './includes/head_links.php'; ?>
     <style>
+        /* ===== BREADCRUMB ===== */
+        .mm-crumb {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: #948c82;
+            margin: 22px 0 10px;
+            flex-wrap: wrap;
+        }
+
+        .mm-crumb a {
+            color: #b51f2c;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .mm-crumb a:hover {
+            text-decoration: underline;
+        }
+
+        .mm-crumb span.sep {
+            color: #c9c2b8;
+        }
+
         /* Page Layout */
         .pp-wrapper {
-            padding: 30px 0;
+            padding: 10px 0 30px;
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 40px;
@@ -325,7 +317,7 @@ if ($customerRowId > 0) {
         .pp-image-col img {
             width: 100%;
             height: 100%;
-            object-fit: cover;
+            object-fit: contain;
             display: block;
         }
 
@@ -337,36 +329,6 @@ if ($customerRowId > 0) {
             left: 50%;
             transform: translate(-50%, -50%);
             color: #d5cbbd;
-        }
-
-        /* Discount Banner Top */
-        .pp-discount-banner {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            background: linear-gradient(135deg, #d42a3a, #b51f2c);
-            color: #fff;
-            padding: 10px 16px;
-            border-radius: 12px;
-            font-size: 13px;
-            font-weight: 800;
-            margin-bottom: 16px;
-            box-shadow: 0 4px 12px rgba(181, 31, 44, .25);
-            text-transform: uppercase;
-            letter-spacing: .04em;
-        }
-
-        .pp-menu-tag {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            background: #fdf1e2;
-            color: #a35a0e;
-            padding: 6px 12px;
-            border-radius: 8px;
-            font-size: 11px;
-            font-weight: 800;
-            margin-bottom: 16px;
         }
 
         /* Details Column */
@@ -410,7 +372,37 @@ if ($customerRowId > 0) {
             margin-bottom: 10px;
         }
 
-        /* Variants Box */
+        /* Discount banner + menu tag */
+        .pp-discount-banner {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: linear-gradient(135deg, #d42a3a, #b51f2c);
+            color: #fff;
+            padding: 10px 16px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 800;
+            margin-bottom: 4px;
+            box-shadow: 0 4px 12px rgba(181, 31, 44, .25);
+            text-transform: uppercase;
+            letter-spacing: .04em;
+        }
+
+        .pp-menu-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #fdf1e2;
+            color: #a35a0e;
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 800;
+            margin-bottom: 4px;
+        }
+
+        /* ===== Variants box ===== */
         .pp-variants-box {
             border: 1.5px solid #e8e1d8;
             border-radius: 14px;
@@ -424,30 +416,102 @@ if ($customerRowId > 0) {
             font-size: 14px;
             font-weight: 800;
             color: #302923;
+            text-transform: uppercase;
+            letter-spacing: .04em;
         }
 
-        .pp-variant-row {
+        /* READ-ONLY variant row */
+        .pp-var-list {
             display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .pp-var-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
             align-items: center;
-            justify-content: space-between;
+            gap: 10px;
+            padding: 8px 12px;
+            border-radius: 10px;
+            background: #fdfaf4;
+            border: 1px solid #f3ece0;
+            font-size: 13px;
+        }
+
+        .pp-var-row:hover {
+            background: #fff7ee;
+            border-color: #ecdcc4;
+        }
+
+        .pp-var-label {
+            color: #302923;
+            font-weight: 700;
+            min-width: 0;
+        }
+
+        .pp-var-label .vn {
+            text-transform: uppercase;
+            letter-spacing: .02em;
+            font-size: 12px;
+        }
+
+        .pp-var-label .vq {
+            font-size: 11.5px;
+            color: #817a71;
+            margin-left: 8px;
+            font-weight: 600;
+        }
+
+        .pp-var-price {
+            font-size: 14px;
+            font-weight: 900;
+            color: #b51f2c;
+            white-space: nowrap;
+        }
+
+        .pp-no-vars {
+            font-size: 12.5px;
+            color: #948c82;
+            font-style: italic;
+            padding: 6px 0;
+        }
+
+        /* ACTIVE cart variant row */
+        .pp-cart-var-row {
+            display: grid;
+            grid-template-columns: 1fr auto auto;
+            align-items: center;
             gap: 12px;
             padding: 10px 0;
             border-bottom: 1px solid #f0ebe4;
         }
 
-        .pp-variant-row:last-child {
+        .pp-cart-var-row:last-child {
             border-bottom: 0;
             padding-bottom: 0;
         }
 
-        .pp-variant-label {
+        .pp-cart-var-label {
             font-size: 13px;
             font-weight: 800;
             color: #302923;
-            flex: 1;
+            min-width: 0;
         }
 
-        .pp-variant-price {
+        .pp-cart-var-label .vn {
+            text-transform: uppercase;
+            font-size: 12px;
+        }
+
+        .pp-cart-var-label .vq {
+            font-size: 11.5px;
+            color: #817a71;
+            margin-left: 6px;
+            font-weight: 600;
+        }
+
+        .pp-cart-var-price {
             font-size: 14px;
             font-weight: 800;
             color: #302923;
@@ -455,7 +519,40 @@ if ($customerRowId > 0) {
             text-align: right;
         }
 
-        /* Qty Stepper */
+        /* ===== Sold-out variant ===== */
+        .pp-cart-var-row.is-soldout .pp-cart-var-label {
+            color: #a19a90;
+        }
+
+        .pp-cart-var-row.is-soldout .pp-cart-var-price {
+            color: #a19a90;
+        }
+
+        .pp-cart-var-row.is-soldout .mm-qty {
+            border-color: #d8d2c9;
+        }
+
+        .pp-cart-var-row.is-soldout .mm-qty-val {
+            color: #a19a90;
+            background: #f5f1ec;
+            border-color: #d8d2c9;
+        }
+
+        .pp-var-soldout-tag {
+            display: inline-block;
+            margin-left: 8px;
+            padding: 2px 7px;
+            font-size: 9.5px;
+            font-weight: 800;
+            letter-spacing: .05em;
+            text-transform: uppercase;
+            color: #fff;
+            background: linear-gradient(135deg, #d42a3a, #b51f2c);
+            border-radius: 4px;
+            vertical-align: middle;
+        }
+
+        /* Qty stepper */
         .mm-qty {
             display: inline-flex;
             align-items: center;
@@ -503,7 +600,7 @@ if ($customerRowId > 0) {
             border-right: 1.5px solid #b51f2c;
         }
 
-        /* Add Button */
+        /* Add / Update button */
         .pp-add-btn {
             width: 100%;
             padding: 14px;
@@ -534,7 +631,95 @@ if ($customerRowId > 0) {
             background: #d8d2c9;
         }
 
-        /* Related Products */
+        /* ===== Recipe maker / About bio ===== */
+        .pp-maker {
+            margin-top: 60px;
+            padding: 28px;
+            background: #fdfaf4;
+            border: 1.5px solid #f0e8da;
+            border-radius: 20px;
+            display: grid;
+            grid-template-columns: 120px 1fr;
+            gap: 22px;
+            align-items: flex-start;
+        }
+
+        @media (max-width: 640px) {
+            .pp-maker {
+                grid-template-columns: 1fr;
+                gap: 14px;
+                padding: 20px;
+                text-align: center;
+            }
+        }
+
+        .pp-maker-avatar {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            overflow: hidden;
+            background: #fff;
+            border: 3px solid #b51f2c;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            margin: 0 auto;
+        }
+
+        .pp-maker-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .pp-maker-avatar svg {
+            width: 55%;
+            height: 55%;
+            color: #b51f2c;
+        }
+
+        .pp-maker-name {
+            font-family: "Playfair Display", serif;
+            font-size: 22px;
+            font-weight: 700;
+            color: #302923;
+            margin: 0 0 4px;
+        }
+
+        .pp-maker-role {
+            font-size: 11.5px;
+            font-weight: 800;
+            color: #b51f2c;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            margin-bottom: 10px;
+        }
+
+        .pp-maker-bio {
+            font-size: 13px;
+            color: #756d65;
+            line-height: 1.65;
+            margin: 0 0 10px;
+        }
+
+        .pp-maker-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .pp-maker-tag {
+            font-size: 10.5px;
+            font-weight: 700;
+            color: #a35a0e;
+            background: #fff;
+            border: 1px solid #f0e0c6;
+            border-radius: 999px;
+            padding: 3px 10px;
+        }
+
+        /* ===== Related Products ===== */
         .pp-related {
             margin-top: 60px;
             padding-top: 40px;
@@ -561,17 +746,15 @@ if ($customerRowId > 0) {
             }
         }
 
-        /* Related Card Styles */
         .pp-rel-card {
             background: #fff;
             border: 1.5px solid #e8e1d8;
             border-radius: 16px;
             overflow: hidden;
             text-decoration: none;
-            display: block;
-            transition: .2s;
             display: flex;
             flex-direction: column;
+            transition: .2s;
         }
 
         .pp-rel-card:hover {
@@ -612,74 +795,6 @@ if ($customerRowId > 0) {
             -webkit-box-orient: vertical;
             overflow: hidden;
         }
-
-        /* Menu label & Badge for related cards */
-        .mm-menu-label {
-            position: absolute;
-            top: 8px;
-            left: 8px;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 5px 10px;
-            border-radius: 999px;
-            font-size: 10px;
-            font-weight: 800;
-            letter-spacing: .05em;
-            text-transform: uppercase;
-            color: #fff;
-            z-index: 4;
-            backdrop-filter: blur(4px);
-            box-shadow: 0 2px 6px rgba(0, 0, 0, .15);
-        }
-
-        .mm-menu-label.today {
-            background: linear-gradient(135deg, #d42a3a, #b51f2c);
-        }
-
-        .mm-menu-label.tomorrow {
-            background: linear-gradient(135deg, #3b82f6, #1e40af);
-        }
-
-        .mm-menu-label.default {
-            background: #302923;
-        }
-
-        .mm-menu-label i {
-            font-size: 10px;
-        }
-
-        .mm-discount-badge {
-            position: absolute;
-            bottom: 10px;
-            left: 10px;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 7px 12px;
-            font-size: 12px;
-            font-weight: 900;
-            letter-spacing: .06em;
-            text-transform: uppercase;
-            color: #fff;
-            line-height: 1;
-            border-radius: 9px;
-            background: linear-gradient(145deg, #d42a3a 0%, #b51f2c 45%, #7a1220 100%);
-            box-shadow: 0 3px 0 #5c0d18, 0 6px 12px rgba(181, 31, 44, .45);
-            transform: rotate(-3deg);
-            z-index: 3;
-            text-shadow: 0 1px 0 rgba(0, 0, 0, .35);
-        }
-
-        .mm-discount-badge::before {
-            content: "";
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: radial-gradient(circle at 30% 30%, #fff5c0, #ffd966 60%, #b8893c);
-            box-shadow: 0 0 5px rgba(255, 217, 102, .9);
-            display: inline-block;
-        }
     </style>
 </head>
 
@@ -689,6 +804,20 @@ if ($customerRowId > 0) {
 
     <main class="mm-main">
         <div class="mm-container">
+
+            <!-- Breadcrumb -->
+            <div class="mm-crumb">
+                <a href="<?= MAIN_URL ?>">Home</a>
+                <span class="sep">›</span>
+                <?php if (!empty($product['category_slug'])): ?>
+                    <a href="category.php?slug=<?= urlencode($product['category_slug']) ?>">
+                        <?= htmlspecialchars($product['category_name'] ?? 'Category') ?>
+                    </a>
+                    <span class="sep">›</span>
+                <?php endif; ?>
+                <span><?= htmlspecialchars($product['product_name']) ?></span>
+            </div>
+
             <div class="pp-wrapper">
 
                 <!-- IMAGE COL -->
@@ -707,6 +836,7 @@ if ($customerRowId > 0) {
 
                 <!-- DETAILS COL -->
                 <div class="pp-details-col">
+
                     <?php if ($badgeText): ?>
                         <div>
                             <span class="pp-discount-banner">
@@ -734,37 +864,139 @@ if ($customerRowId > 0) {
                         <?= $product['description'] ? $product['description'] : '<p>No description available for this product.</p>' ?>
                     </div>
 
-                    <!-- VARIANTS -->
+                    <!-- =====================================================
+                         VARIANTS
+                         → In active menu: qty steppers (sold-out disables +) + Add/Update
+                         → Not in menu: read-only price list
+                         ===================================================== -->
                     <div class="pp-variants-box">
-                        <h3>Select Quantity</h3>
-                        <div id="variantList">
-                            <?php foreach ($variants as $v):
-                                $vid = (int)$v['id'];
-                                $cartQty = $cartQtyByVariant[$vid] ?? 0;
-                                $qtyLabel = $v['quantity_name'] ?: ($v['quantity'] . ' ' . $v['quantity_unit']);
-                            ?>
-                                <div class="pp-variant-row" data-variant-id="<?= $vid ?>" data-price="<?= $v['price'] ?>" data-original="<?= $cartQty ?>">
-                                    <span class="pp-variant-label"><?= htmlspecialchars($qtyLabel) ?></span>
-                                    <div class="mm-qty" data-qty="<?= $cartQty ?>">
-                                        <button type="button" class="js-qty-minus" <?= $cartQty === 0 ? 'disabled' : '' ?>>−</button>
-                                        <span class="mm-qty-val"><?= $cartQty ?></span>
-                                        <button type="button" class="js-qty-plus">+</button>
-                                    </div>
-                                    <span class="pp-variant-price">Rs. <?= number_format((float)$v['price'], 0) ?></span>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
 
-                        <button type="button" class="pp-add-btn" id="addToCartBtn" disabled>
-                            <i class="bi bi-cart-plus"></i>
-                            <span>Add to Cart</span>
-                        </button>
+                        <?php if ($canAddToCart): ?>
+                            <!-- ========== CART MODE ========== -->
+                            <h3>Select Quantity</h3>
+
+                            <div id="variantList">
+                                <?php if (!empty($variants)): ?>
+                                    <?php foreach ($variants as $v):
+                                        $vid       = (int)$v['id'];
+                                        $cartQty   = (int)($cartQtyByVariant[$vid] ?? 0);
+                                        $vName     = trim((string)($v['quantity_name'] ?? ''));
+                                        $vQty      = fmtQty($v['quantity'] ?? 0, $v['quantity_unit'] ?? '');
+                                        $vPrice    = (float)($v['price'] ?? 0);
+                                        $soldOut   = !empty($soldOutByVariant[$vid]);
+                                    ?>
+                                        <div class="pp-cart-var-row <?= $soldOut ? 'is-soldout' : '' ?>"
+                                            data-variant-id="<?= $vid ?>"
+                                            data-price="<?= $vPrice ?>"
+                                            data-original="<?= $cartQty ?>"
+                                            data-soldout="<?= $soldOut ? '1' : '0' ?>">
+
+                                            <div class="pp-cart-var-label">
+                                                <?php if ($vName !== ''): ?>
+                                                    <span class="vn"><?= htmlspecialchars($vName) ?></span>
+                                                <?php endif; ?>
+                                                <?php if ($vQty !== ''): ?>
+                                                    <span class="vq"><?= htmlspecialchars($vQty) ?></span>
+                                                <?php endif; ?>
+                                                <?php if ($soldOut): ?>
+                                                    <span class="pp-var-soldout-tag">Sold Out</span>
+                                                <?php endif; ?>
+                                            </div>
+
+                                            <div class="mm-qty" data-qty="<?= $cartQty ?>">
+                                                <button type="button" class="js-qty-minus" <?= $cartQty === 0 ? 'disabled' : '' ?>>−</button>
+                                                <span class="mm-qty-val"><?= $cartQty ?></span>
+                                                <button type="button" class="js-qty-plus" <?= $soldOut ? 'disabled' : '' ?>>+</button>
+                                            </div>
+
+                                            <div class="pp-cart-var-price">₹<?= number_format($vPrice, 0) ?></div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <div class="pp-no-vars">No variants available for this product.</div>
+                                <?php endif; ?>
+                            </div>
+
+                            <?php if (!empty($variants)): ?>
+                                <button type="button" class="pp-add-btn" id="addToCartBtn" disabled>
+                                    <i class="bi bi-cart-plus"></i>
+                                    <span>Add to Cart</span>
+                                </button>
+                            <?php endif; ?>
+
+                        <?php else: ?>
+                            <!-- ========== READ-ONLY MODE ========== -->
+                            <h3>Available Sizes &amp; Prices</h3>
+
+                            <?php if (!empty($variants)): ?>
+                                <div class="pp-var-list">
+                                    <?php foreach ($variants as $v):
+                                        $vName  = trim((string)($v['quantity_name'] ?? ''));
+                                        $vQty   = fmtQty($v['quantity'] ?? 0, $v['quantity_unit'] ?? '');
+                                        $vPrice = (float)($v['price'] ?? 0);
+                                    ?>
+                                        <div class="pp-var-row">
+                                            <div class="pp-var-label">
+                                                <?php if ($vName !== ''): ?>
+                                                    <span class="vn"><?= htmlspecialchars($vName) ?></span>
+                                                <?php endif; ?>
+                                                <?php if ($vQty !== ''): ?>
+                                                    <span class="vq"><?= htmlspecialchars($vQty) ?></span>
+                                                <?php endif; ?>
+                                            </div>
+                                            <div class="pp-var-price">₹<?= number_format($vPrice, 0) ?></div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php else: ?>
+                                <div class="pp-no-vars">No variants available for this product.</div>
+                            <?php endif; ?>
+
+                        <?php endif; ?>
                     </div>
+
                 </div>
 
             </div>
 
-            <!-- RELATED PRODUCTS -->
+            <!-- ================= RECIPE MAKER / ABOUT ================= -->
+            <section class="pp-maker">
+                <div class="pp-maker-avatar">
+                    <?php if ($logoUrl): ?>
+                        <img src="<?= htmlspecialchars($logoUrl) ?>" alt="<?= htmlspecialchars($siteName) ?>">
+                    <?php else: ?>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="8" r="4" />
+                            <path d="M4 21c0-4 4-7 8-7s8 3 8 7" />
+                        </svg>
+                    <?php endif; ?>
+                </div>
+
+                <div>
+                    <h2 class="pp-maker-name"><?= htmlspecialchars($siteName) ?></h2>
+                    <div class="pp-maker-role">Traditional Recipe Maker · Homemade with Love</div>
+
+                    <p class="pp-maker-bio">
+                        At <strong><?= htmlspecialchars($siteName) ?></strong>, every product is crafted the way our grandmothers made it -
+                        slowly, patiently, and with ingredients you can actually pronounce. From stone-ground millet
+                        batters to hand-pounded podis, we keep the old recipes alive so every meal tastes like home.
+                    </p>
+                    <p class="pp-maker-bio">
+                        No preservatives. No shortcuts. Just fresh, traditional Tamil Nadu flavours delivered to your door -
+                        the same way they've been made for generations.
+                    </p>
+
+                    <div class="pp-maker-tags">
+                        <span class="pp-maker-tag">🌾 Stone-Ground</span>
+                        <span class="pp-maker-tag">🏡 Homemade</span>
+                        <span class="pp-maker-tag">🚫 No Preservatives</span>
+                        <span class="pp-maker-tag">🌿 Traditional Recipes</span>
+                        <span class="pp-maker-tag">📦 Fresh Daily</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ================= RELATED PRODUCTS ================= -->
             <?php if (!empty($relatedProducts)): ?>
                 <div class="pp-related">
                     <h2>You may also like</h2>
@@ -782,15 +1014,6 @@ if ($customerRowId > 0) {
                                             <path d="M3.3 7L12 12l8.7-5" />
                                             <path d="M12 22V12" />
                                         </svg>
-                                    <?php endif; ?>
-
-                                    <span class="mm-menu-label <?= $rp['rel_label_class'] ?>">
-                                        <i class="<?= $rp['rel_icon'] ?>"></i>
-                                        <?= htmlspecialchars($rp['rel_label_text']) ?>
-                                    </span>
-
-                                    <?php if (!empty($rp['rel_discount_badge'])): ?>
-                                        <span class="mm-discount-badge"><?= htmlspecialchars($rp['rel_discount_badge']) ?></span>
                                     <?php endif; ?>
                                 </div>
                                 <div class="pp-rel-body">
@@ -819,67 +1042,92 @@ if ($customerRowId > 0) {
         window.IS_LOGGED_IN = <?= $customerLoggedIn ? 'true' : 'false' ?>;
         window.CART_COUNT = <?= (int)$cartCount ?>;
         window.CART_TOTAL = <?= (float)$cartTotal ?>;
-
-        // Specific data for this page
+        window.CUSTOMER = {
+            id: <?= (int)$customerRowId ?>,
+            code: "<?= htmlspecialchars($customerCode,   ENT_QUOTES) ?>",
+            name: "<?= htmlspecialchars($customerName,   ENT_QUOTES) ?>",
+            mobile: "<?= htmlspecialchars($customerMobile, ENT_QUOTES) ?>"
+        };
+        window.CAN_ADD_TO_CART = <?= $canAddToCart ? 'true' : 'false' ?>;
         window.PP_PRODUCT_ID = <?= (int)$productId ?>;
         window.PP_MENU_CODE = "<?= htmlspecialchars($menuCode) ?>";
     </script>
 
-    <script src="<?= MAIN_URL ?>js/home.js"></script>
-
-    <!-- Specific Script for Product Page Inline Cart -->
     <script>
         (function() {
-            const btn = document.getElementById("addToCartBtn");
-            const rows = document.querySelectorAll(".pp-variant-row");
-            if (!btn) return;
+            var bar = document.getElementById('stickyCartBar');
+            var count = Number(window.CART_COUNT || 0);
+            if (!bar) return;
+            bar.style.display = count > 0 ? 'flex' : 'none';
+        })();
+    </script>
 
-            // Helper to show toast safely
-            function localToast(msg, type) {
-                let t = document.getElementById("mmToast");
-                if (!t) {
-                    t = document.createElement("div");
-                    t.id = "mmToast";
-                    document.body.appendChild(t);
+    <script src="<?= MAIN_URL ?>js/home.js"></script>
+
+    <?php if ($canAddToCart && !empty($variants)): ?>
+        <!-- Product-page inline cart — only runs when the product is in an active menu -->
+        <script>
+            (function() {
+                const btn = document.getElementById("addToCartBtn");
+                const rows = document.querySelectorAll(".pp-cart-var-row");
+                if (!btn || rows.length === 0) return;
+
+                function localToast(msg, type) {
+                    let t = document.getElementById("mmToast");
+                    if (!t) {
+                        t = document.createElement("div");
+                        t.id = "mmToast";
+                        document.body.appendChild(t);
+                    }
+                    t.textContent = msg;
+                    t.className = "show" + (type === "error" ? " error" : "");
+                    clearTimeout(t._t);
+                    t._t = setTimeout(() => (t.className = ""), 2600);
                 }
-                t.textContent = msg;
-                t.className = "show" + (type === "error" ? " error" : "");
-                clearTimeout(t._t);
-                t._t = setTimeout(() => (t.className = ""), 2600);
-            }
 
-            // Update the button text and state (Add vs Update)
-            function updateBtnState() {
-                let anyQty = false;
-                let anyChanged = false;
-                rows.forEach(r => {
-                    const q = Number(r.querySelector(".mm-qty").dataset.qty || 0);
-                    const orig = Number(r.dataset.original || 0);
-                    if (q > 0) anyQty = true;
-                    if (q !== orig) anyChanged = true;
-                });
+                function updateBtnState() {
+                    let anyChanged = false;
+                    let anyQty = false;
+                    let anyBuyable = false;
 
-                if (!anyQty && !anyChanged) {
-                    btn.disabled = true;
-                    btn.querySelector("span").textContent = "Add to Cart";
-                } else if (anyChanged) {
-                    btn.disabled = false;
-                    btn.querySelector("span").textContent = "Update Cart";
-                } else {
-                    btn.disabled = false;
-                    btn.querySelector("span").textContent = "Add to Cart";
+                    rows.forEach(r => {
+                        const q = Number(r.querySelector(".mm-qty").dataset.qty || 0);
+                        const orig = Number(r.dataset.original || 0);
+                        const soldOut = r.dataset.soldout === "1";
+
+                        if (q > 0) anyQty = true;
+                        if (q !== orig) anyChanged = true;
+                        if (!soldOut && q > 0) anyBuyable = true;
+                        if (!soldOut && q > orig) anyBuyable = true;
+                    });
+
+                    if (anyChanged && anyBuyable) {
+                        btn.disabled = false;
+                        btn.querySelector("span").textContent = "Update Cart";
+                    } else if (anyQty && anyBuyable) {
+                        btn.disabled = false;
+                        btn.querySelector("span").textContent = "Add to Cart";
+                    } else if (!anyBuyable && anyQty) {
+                        /* Only sold-out variants still in cart → allow removing them via Update */
+                        btn.disabled = false;
+                        btn.querySelector("span").textContent = "Update Cart";
+                    } else if (!anyBuyable) {
+                        btn.disabled = true;
+                        btn.querySelector("span").textContent = "Sold Out";
+                    } else {
+                        btn.disabled = true;
+                        btn.querySelector("span").textContent = "Add to Cart";
+                    }
                 }
-            }
 
-            // Bind Plus/Minus buttons
-            rows.forEach(row => {
-                const minus = row.querySelector(".js-qty-minus");
-                const plus = row.querySelector(".js-qty-plus");
-                const val = row.querySelector(".mm-qty-val");
-                const box = row.querySelector(".mm-qty");
+                rows.forEach(row => {
+                    const minus = row.querySelector(".js-qty-minus");
+                    const plus = row.querySelector(".js-qty-plus");
+                    const val = row.querySelector(".mm-qty-val");
+                    const box = row.querySelector(".mm-qty");
+                    const isSoldOut = row.dataset.soldout === "1";
 
-                if (plus) {
-                    plus.addEventListener("click", () => {
+                    if (plus && !isSoldOut) plus.addEventListener("click", () => {
                         let q = Number(box.dataset.qty || 0);
                         q++;
                         box.dataset.qty = q;
@@ -887,10 +1135,8 @@ if ($customerRowId > 0) {
                         minus.disabled = false;
                         updateBtnState();
                     });
-                }
 
-                if (minus) {
-                    minus.addEventListener("click", () => {
+                    if (minus) minus.addEventListener("click", () => {
                         let q = Number(box.dataset.qty || 0);
                         if (q > 0) q--;
                         box.dataset.qty = q;
@@ -898,90 +1144,103 @@ if ($customerRowId > 0) {
                         minus.disabled = q === 0;
                         updateBtnState();
                     });
-                }
-            });
-
-            // Sync to Cart
-            btn.addEventListener("click", function() {
-                if (!window.IS_LOGGED_IN) {
-                    localToast("Please log in to add items.", "error");
-                    const navBtn = document.getElementById("navLoginBtn");
-                    if (navBtn) navBtn.click();
-                    return;
-                }
-
-                const items = [];
-                rows.forEach(r => {
-                    const q = Number(r.querySelector(".mm-qty").dataset.qty || 0);
-                    items.push({
-                        variant_id: Number(r.dataset.variantId),
-                        qty: q
-                    });
                 });
 
-                btn.disabled = true;
-                const oldText = btn.querySelector("span").textContent;
-                btn.querySelector("span").textContent = "Saving...";
+                btn.addEventListener("click", function() {
+                    if (!window.IS_LOGGED_IN) {
+                        localToast("Please log in to add items.", "error");
+                        const navBtn = document.getElementById("navLoginBtn");
+                        if (navBtn) navBtn.click();
+                        return;
+                    }
 
-                const fd = new FormData();
-                fd.append("product_id", window.PP_PRODUCT_ID);
-                fd.append("menu_code", window.PP_MENU_CODE);
-                fd.append("items", JSON.stringify(items));
+                    const items = [];
+                    rows.forEach(r => {
+                        const q = Number(r.querySelector(".mm-qty").dataset.qty || 0);
+                        items.push({
+                            variant_id: Number(r.dataset.variantId),
+                            qty: q
+                        });
+                    });
 
-                fetch(window.MAIN_URL + "ajax/cart-sync.php", {
-                        method: "POST",
-                        body: fd,
-                        credentials: "same-origin"
-                    })
-                    .then(r => r.json().catch(() => null))
-                    .then(res => {
-                        if (!res || !res.success) {
-                            localToast((res && res.message) || "Failed.", "error");
-                            btn.disabled = false;
-                            btn.querySelector("span").textContent = oldText;
-                            return;
-                        }
+                    // Filter out sold-out items (qty > 0 but sold out should never be posted)
+                    const sentItems = items.filter(it => {
+                        const row = document.querySelector(`.pp-cart-var-row[data-variant-id="${it.variant_id}"]`);
+                        if (!row) return false;
+                        if (row.dataset.soldout === "1" && it.qty > 0) return false;
+                        return true;
+                    });
 
-                        localToast("Cart updated.");
+                    if (sentItems.length === 0) {
+                        localToast("All selected sizes are sold out.", "error");
+                        btn.disabled = false;
+                        updateBtnState();
+                        return;
+                    }
 
-                        // Update the cart badge & sticky cart
-                        if (res.data) {
-                            if (typeof window.paintCartUI === "function") {
-                                window.paintCartUI(res.data.cart_count, res.data.cart_total);
-                            } else {
-                                document.querySelectorAll(".js-cart-count, [data-cart-count]").forEach(el => {
-                                    el.textContent = res.data.cart_count;
-                                });
-                                const stickyC = document.getElementById("stickyCartCount");
-                                const stickyT = document.getElementById("stickyCartTotal");
-                                if (stickyC) stickyC.textContent = res.data.cart_count;
-                                if (stickyT) stickyT.textContent = "₹" + Math.round(res.data.cart_total);
-                                if (res.data.cart_count > 0) {
-                                    const bar = document.getElementById("stickyCartBar");
-                                    if (bar) bar.style.display = "flex";
+                    btn.disabled = true;
+                    const oldText = btn.querySelector("span").textContent;
+                    btn.querySelector("span").textContent = "Saving...";
+
+                    const fd = new FormData();
+                    fd.append("product_id", window.PP_PRODUCT_ID);
+                    fd.append("menu_code", window.PP_MENU_CODE);
+                    fd.append("items", JSON.stringify(sentItems));
+
+                    fetch(window.MAIN_URL + "ajax/cart-sync.php", {
+                            method: "POST",
+                            body: fd,
+                            credentials: "same-origin"
+                        })
+                        .then(r => r.json().catch(() => null))
+                        .then(res => {
+                            if (!res || !res.success) {
+                                localToast((res && res.message) || "Failed.", "error");
+                                btn.disabled = false;
+                                btn.querySelector("span").textContent = oldText;
+                                return;
+                            }
+
+                            localToast("Cart updated.");
+
+                            if (res.data) {
+                                if (typeof window.paintCartUI === "function") {
+                                    window.paintCartUI(res.data.cart_count, res.data.cart_total);
+                                } else {
+                                    document.querySelectorAll(".js-cart-count, [data-cart-count]").forEach(el => {
+                                        el.textContent = res.data.cart_count;
+                                    });
+                                    const stickyC = document.getElementById("stickyCartCount");
+                                    const stickyT = document.getElementById("stickyCartTotal");
+                                    if (stickyC) stickyC.textContent = res.data.cart_count;
+                                    if (stickyT) stickyT.textContent = "₹" + Math.round(res.data.cart_total);
+                                    if (res.data.cart_count > 0) {
+                                        const bar = document.getElementById("stickyCartBar");
+                                        if (bar) bar.style.display = "flex";
+                                    }
                                 }
                             }
-                        }
 
-                        // CRITICAL: Update the "original" attribute so the button resets to "Update Cart" or "Add to Cart" properly
-                        rows.forEach(r => {
-                            const box = r.querySelector(".mm-qty");
-                            r.dataset.original = box.dataset.qty;
+                            rows.forEach(r => {
+                                const box = r.querySelector(".mm-qty");
+                                r.dataset.original = box.dataset.qty;
+                            });
+
+                            updateBtnState();
+                        })
+                        .catch((err) => {
+                            console.error(err);
+                            localToast("Network error.", "error");
+                            btn.disabled = false;
+                            btn.querySelector("span").textContent = oldText;
                         });
+                });
 
-                        updateBtnState();
-                    })
-                    .catch((err) => {
-                        console.error(err);
-                        localToast("Network error.", "error");
-                        btn.disabled = false;
-                        btn.querySelector("span").textContent = oldText;
-                    });
-            });
+                updateBtnState();
+            })();
+        </script>
+    <?php endif; ?>
 
-            updateBtnState();
-        })();
-    </script>
 </body>
 
 </html>

@@ -1318,3 +1318,190 @@ button {
     width: 13px;
     height: 13px;
 }
+
+/* =========================================================
+   OUT-OF-STOCK VARIANT ROW (single variant sold out)
+   ========================================================= */
+.mm-variant-row.is-out-of-stock {
+    opacity: 0.55;
+    filter: grayscale(0.4);
+}
+.mm-variant-row.is-out-of-stock .mm-variant-label {
+    color: #948c82;
+    text-decoration: line-through;
+}
+.mm-variant-row.is-out-of-stock .mm-qty {
+    border-color: #d8d2c9;
+    background: #f7f2ec;
+}
+.mm-variant-row.is-out-of-stock .mm-qty button,
+.mm-variant-row.is-out-of-stock .mm-qty-val {
+    color: #b0a79c;
+    border-color: #d8d2c9;
+    background: #f7f2ec;
+}
+
+/* =========================================================
+   SOLD OUT LABEL (inside variant row)
+   ========================================================= */
+.out-stock-lbl {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    font-size: 8.5px;
+    font-weight: 900;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: #fff;
+    background: #b51f2c;
+    border-radius: 4px;
+    vertical-align: middle;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+
+/* =========================================================
+   SOLD OUT BUTTON (single variant sold out — button disabled)
+   ========================================================= */
+.mm-add-btn.is-sold-out {
+    background: #302923;
+    border-color: #302923;
+    color: #fff;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* =========================================================
+   WHOLE CARD = SOLD OUT (all variants out of stock)
+   ========================================================= */
+.js-product-card.is-sold-out-all {
+    position: relative;
+    filter: grayscale(1);
+    opacity: 0.72;
+}
+.js-product-card.is-sold-out-all .mm-product-img img {
+    filter: grayscale(1) contrast(0.9);
+}
+.js-product-card.is-sold-out-all .mm-product-name {
+    color: #6f675f;
+}
+.js-product-card.is-sold-out-all .mm-variants {
+    opacity: 0.4;
+    pointer-events: none;
+}
+.js-product-card.is-sold-out-all .mm-add-btn {
+    background: #302923;
+    border-color: #302923;
+    color: #fff;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* Big SOLD OUT ribbon over the image */
+.js-product-card.is-sold-out-all .mm-product-img::after {
+    content: "SOLD OUT";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-8deg);
+    padding: 8px 20px;
+    background: rgba(48, 41, 35, 0.92);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: .12em;
+    border-radius: 8px;
+    border: 2px solid #fff;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+    z-index: 5;
+    white-space: nowrap;
+    pointer-events: none;
+    text-shadow: 0 1px 0 rgba(0, 0, 0, .4);
+}
+
+/* =========================================================
+   RESPONSIVE — combine all breakpoints into 2 queries
+   ========================================================= */
+@media (max-width: 768px) {
+    .out-stock-lbl {
+        margin-left: 4px;
+        padding: 1px 5px;
+        font-size: 7.5px;
+        border-radius: 3px;
+    }
+
+    .mm-add-btn.is-sold-out {
+        font-size: 10px;
+        padding: 6px 10px;
+        max-width: 100%;
+    }
+
+    .js-product-card.is-sold-out-all .mm-product-img::after {
+        padding: 6px 16px;
+        font-size: 11px;
+        border-width: 1.5px;
+    }
+}
+
+@media (max-width: 480px) {
+    .out-stock-lbl {
+        margin-left: 3px;
+        padding: 0 4px;
+        font-size: 7px;
+    }
+
+    .mm-add-btn.is-sold-out {
+        font-size: 9.5px;
+        padding: 5px 8px;
+        letter-spacing: .04em;
+    }
+
+    .js-product-card.is-sold-out-all .mm-product-img::after {
+        padding: 5px 12px;
+        font-size: 10px;
+        letter-spacing: .08em;
+        border-radius: 6px;
+    }
+}
+
+/* =========================================================
+   OUT-OF-STOCK VARIANT — SIMPLE
+   ========================================================= */
+.mm-variant-row {
+    position: relative;
+}
+
+/* Sold-out row */
+.mm-variant-row.is-out-of-stock {
+    background: #f7f2ec;
+    border-radius: 8px;
+    padding: 4px 6px;
+}
+
+.mm-variant-row.is-out-of-stock .mm-variant-label {
+    color: #a19a90;
+}
+
+/* Simple "Sold Out" text next to the name */
+.mm-oos-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    font-size: 8.5px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #b51f2c;
+    background: #fde6e6;
+    border: 1px solid #f3c8cc;
+    border-radius: 4px;
+    vertical-align: middle;
+}
+
+/* Grey stepper for sold-out rows */
+.mm-variant-row.is-out-of-stock .mm-qty {
+    opacity: 0.5;
+}
+.mm-variant-row.is-out-of-stock .mm-variant-price {
+    color: #a19a90;
+}

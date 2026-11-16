@@ -21,9 +21,9 @@ if ($customerId > 0) {
     try {
         $stmt = $pdo->prepare(
             "SELECT id AS cart_id, menu_code, product_id, product_code AS code, product_name AS name,
-            product_image AS image, variant_id, variant_name, variant_qty,
-            price, qty
-     FROM customer_cart WHERE customer_id = ? ORDER BY id DESC"
+                    product_image AS image, variant_id, variant_name, variant_qty,
+                    price, qty
+             FROM customer_cart WHERE customer_id = ? ORDER BY id DESC"
         );
         $stmt->execute([$customerId]);
         $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -34,6 +34,7 @@ if ($customerId > 0) {
         foreach ($_SESSION['cart'] as $c) {
             $items[] = [
                 'cart_id'      => $c['key'] ?? '',
+                'menu_code'    => $c['menu_code'] ?? '',
                 'product_id'   => (int)($c['product_id'] ?? 0),
                 'code'         => $c['code'] ?? '',
                 'name'         => $c['name'] ?? '',
@@ -55,6 +56,127 @@ foreach ($items as $it) {
     $cartCount += $q;
     $cartTotal += ((float)($it['price'] ?? 0)) * $q;
 }
+
+/* =========================================================
+   MENU LOOKUP
+   ========================================================= */
+$menuMeta = [];
+$cartMenuCodes = [];
+foreach ($items as $it) {
+    $mc = trim((string)($it['menu_code'] ?? ''));
+    if ($mc !== '') $cartMenuCodes[$mc] = true;
+}
+
+if (!empty($cartMenuCodes)) {
+    try {
+        $in = implode(',', array_fill(0, count($cartMenuCodes), '?'));
+        $mStmt = $pdo->prepare(
+            "SELECT menu_code, menu_name, start_at, end_at
+             FROM menus WHERE menu_code IN ($in)"
+        );
+        $mStmt->execute(array_keys($cartMenuCodes));
+        $todayDate    = date('Y-m-d');
+        $tomorrowDate = date('Y-m-d', strtotime('+1 day'));
+
+        foreach ($mStmt->fetchAll(PDO::FETCH_ASSOC) as $m) {
+            $endDate = !empty($m['end_at']) ? date('Y-m-d', strtotime($m['end_at'])) : '';
+            if ($endDate === $todayDate) {
+                $label = 'Today';
+                $cls   = 'today';
+                $icon  = 'bi bi-fire';
+            } elseif ($endDate === $tomorrowDate) {
+                $label = 'Tomorrow';
+                $cls   = 'tomorrow';
+                $icon  = 'bi bi-sunrise';
+            } else {
+                $label = $m['menu_name'];
+                $cls   = 'default';
+                $icon  = 'bi bi-grid';
+            }
+            $menuMeta[$m['menu_code']] = [
+                'label' => $label,
+                'class' => $cls,
+                'icon'  => $icon,
+                'name'  => $m['menu_name'],
+            ];
+        }
+    } catch (PDOException $e) {
+    }
+}
+
+/* =========================================================
+   LIVE STOCK CHECK
+   ========================================================= */
+$cartStock = []; // key: menu_code|product_code|variant_id => ['unlimited','count','oos']
+
+if (!empty($items)) {
+    $rowsByMenu = [];
+    foreach ($items as $it) {
+        $mc = trim((string)($it['menu_code'] ?? ''));
+        if ($mc === '') continue;
+        $rowsByMenu[$mc][] = $it;
+    }
+
+    foreach ($rowsByMenu as $mc => $rows) {
+        try {
+            $productCodes = array_unique(array_filter(array_map(
+                fn($r) => trim((string)($r['code'] ?? '')),
+                $rows
+            )));
+            if (empty($productCodes)) continue;
+
+            $in = implode(',', array_fill(0, count($productCodes), '?'));
+            $sStmt = $pdo->prepare(
+                "SELECT mp.product_code, mp.variant_id,
+                        COALESCE(mp.stock_unlimited,0) AS stock_unlimited,
+                        COALESCE(mp.stock_count,0)     AS stock_count
+                 FROM menu_products mp
+                 WHERE mp.menu_code = ? AND mp.product_code IN ($in)"
+            );
+            $params = array_merge([$mc], $productCodes);
+            $sStmt->execute($params);
+
+            while ($s = $sStmt->fetch(PDO::FETCH_ASSOC)) {
+                $key = $mc . '|' . $s['product_code'] . '|' . (int)$s['variant_id'];
+                $unlimited = (int)$s['stock_unlimited'] === 1;
+                $count     = (int)$s['stock_count'];
+                $oos       = (!$unlimited && $count <= 0);
+
+                $cartStock[$key] = [
+                    'unlimited' => $unlimited,
+                    'count'     => $count,
+                    'oos'       => $oos,
+                ];
+            }
+        } catch (PDOException $e) {
+        }
+    }
+}
+
+/* Helper: resolve stock for a row */
+function cartRowStock(array $it, array $cartStock): array
+{
+    $mc   = trim((string)($it['menu_code'] ?? ''));
+    $code = trim((string)($it['code']      ?? ''));
+    $vid  = (int)($it['variant_id'] ?? 0);
+
+    if ($mc === '' || $code === '' || $vid <= 0) {
+        return ['unlimited' => true, 'count' => 9999, 'oos' => false];
+    }
+    $key = $mc . '|' . $code . '|' . $vid;
+    if (isset($cartStock[$key])) return $cartStock[$key];
+    return ['unlimited' => true, 'count' => 9999, 'oos' => false];
+}
+
+/* Global flag — any row sold out? */
+$hasAnyOOS = false;
+foreach ($items as $it) {
+    $s = cartRowStock($it, $cartStock);
+    if (!empty($s['oos'])) {
+        $hasAnyOOS = true;
+        break;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -64,7 +186,7 @@ foreach ($items as $it) {
 
     <style>
         /* =====================================================
-           PAGE WRAPPER — responsive left/right padding
+           PAGE WRAPPER
            ===================================================== */
         .ct-page {
             max-width: 1200px;
@@ -129,7 +251,7 @@ foreach ($items as $it) {
         }
 
         /* =====================================================
-           LAYOUT GRID
+           LAYOUT
            ===================================================== */
         .ct-layout {
             display: grid;
@@ -145,7 +267,6 @@ foreach ($items as $it) {
             }
         }
 
-        /* ---------- Cart items card ---------- */
         .ct-items {
             background: #fff;
             border: 1.5px solid #ece5da;
@@ -228,6 +349,54 @@ foreach ($items as $it) {
             margin: 5px 0 0;
         }
 
+        /* ---------- Menu Badge ---------- */
+        .ct-menu-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 9.5px;
+            font-weight: 800;
+            letter-spacing: .05em;
+            text-transform: uppercase;
+            color: #fff;
+            line-height: 1.3;
+            margin: 4px 0 2px;
+        }
+
+        .ct-menu-badge.today {
+            background: linear-gradient(135deg, #d42a3a, #b51f2c);
+        }
+
+        .ct-menu-badge.tomorrow {
+            background: linear-gradient(135deg, #3b82f6, #1e40af);
+        }
+
+        .ct-menu-badge.default {
+            background: #302923;
+        }
+
+        .ct-menu-badge i {
+            font-size: 9px;
+        }
+
+        /* ---------- Sold-Out chip ---------- */
+        .ct-oos-chip {
+            display: inline-block;
+            margin-left: 6px;
+            padding: 1px 7px;
+            font-size: 9.5px;
+            font-weight: 800;
+            letter-spacing: .05em;
+            text-transform: uppercase;
+            color: #b51f2c;
+            background: #fde6e6;
+            border: 1px solid #f3c8cc;
+            border-radius: 4px;
+            vertical-align: middle;
+        }
+
         /* ---------- Qty controls ---------- */
         .ct-qty {
             grid-area: qty;
@@ -280,7 +449,7 @@ foreach ($items as $it) {
             text-align: center;
         }
 
-        /* ---------- Remove button ---------- */
+        /* ---------- Remove ---------- */
         .ct-remove {
             grid-area: remove;
             justify-self: end;
@@ -302,8 +471,26 @@ foreach ($items as $it) {
             background: #fde6e6;
         }
 
+        /* ---------- Sold-Out row state (simple) ---------- */
+        .ct-item.is-oos {
+            background: #fdfaf4;
+        }
+
+        .ct-item.is-oos .ct-item-meta,
+        .ct-item.is-oos .ct-item-price {
+            color: #a19a90;
+        }
+
+        .ct-item.is-oos .ct-qty {
+            opacity: .55;
+        }
+
+        .ct-item.is-oos .ct-qty button {
+            cursor: not-allowed;
+        }
+
         /* =====================================================
-           SUMMARY CARD
+           SUMMARY
            ===================================================== */
         .ct-summary {
             background: #fff;
@@ -381,6 +568,15 @@ foreach ($items as $it) {
             color: #fff;
         }
 
+        /* Disabled checkout state */
+        .ct-checkout-btn.is-disabled {
+            background: #d8d2c9;
+            box-shadow: none;
+            cursor: not-allowed;
+            pointer-events: none;
+            opacity: .85;
+        }
+
         /* =====================================================
            EMPTY STATE
            ===================================================== */
@@ -450,7 +646,6 @@ foreach ($items as $it) {
 
     <?php include_once './includes/nav-bar.php'; ?>
 
-
     <main class="mm-main">
         <div class="ct-page">
 
@@ -472,7 +667,6 @@ foreach ($items as $it) {
                     <h3>Your cart is empty</h3>
                     <p>Add some products to get started.</p>
                     <a href="<?= MAIN_URL ?>" class="ct-empty-btn">
-                      
                         Continue Shopping
                     </a>
                 </div>
@@ -483,12 +677,18 @@ foreach ($items as $it) {
                     <!-- ============ ITEMS ============ -->
                     <div class="ct-items" id="cartItemsList">
                         <?php foreach ($items as $it):
-                            $img = !empty($it['image']) ? $it['image'] : '';
+                            $img       = !empty($it['image']) ? $it['image'] : '';
                             $lineTotal = ((float)$it['price']) * ((int)$it['qty']);
+                            $stock     = cartRowStock($it, $cartStock);
+                            $isOOS     = !empty($stock['oos']);
+                            $maxStock  = $stock['unlimited'] ? 9999 : (int)$stock['count'];
+                            $currentQ  = (int)$it['qty'];
                         ?>
-                            <div class="ct-item"
+                            <div class="ct-item <?= $isOOS ? 'is-oos' : '' ?>"
                                 data-product-id="<?= (int)$it['product_id'] ?>"
-                                data-variant-id="<?= (int)$it['variant_id'] ?>">
+                                data-variant-id="<?= (int)$it['variant_id'] ?>"
+                                data-max-stock="<?= $maxStock ?>"
+                                data-oos="<?= $isOOS ? '1' : '0' ?>">
 
                                 <div class="ct-item-thumb">
                                     <?php if ($img): ?>
@@ -499,7 +699,26 @@ foreach ($items as $it) {
                                 </div>
 
                                 <div class="ct-item-info">
-                                    <p class="ct-item-name"><?= htmlspecialchars($it['name'] ?? '') ?></p>
+                                    <p class="ct-item-name">
+                                        <?= htmlspecialchars($it['name'] ?? '') ?>
+                                        <?php if ($isOOS): ?>
+                                            <span class="ct-oos-chip">Sold Out</span>
+                                        <?php endif; ?>
+                                    </p>
+
+                                    <?php
+                                    $mc = trim((string)($it['menu_code'] ?? ''));
+                                    $menuInfo = $mc !== '' && isset($menuMeta[$mc]) ? $menuMeta[$mc] : null;
+                                    ?>
+
+                                    <?php if ($menuInfo): ?>
+                                        <span class="ct-menu-badge <?= htmlspecialchars($menuInfo['class']) ?>"
+                                            title="<?= htmlspecialchars($menuInfo['name']) ?>">
+                                            <i class="<?= htmlspecialchars($menuInfo['icon']) ?>"></i>
+                                            <?= htmlspecialchars($menuInfo['label']) ?>
+                                        </span>
+                                    <?php endif; ?>
+
                                     <p class="ct-item-meta">
                                         <?php if (!empty($it['variant_name'])): ?>
                                             <?= htmlspecialchars($it['variant_name']) ?> ·
@@ -513,16 +732,24 @@ foreach ($items as $it) {
                                 </div>
 
                                 <div class="ct-qty">
-                                    <button type="button" class="js-dec" data-product-id="<?= (int)$it['product_id'] ?>" data-variant-id="<?= (int)$it['variant_id'] ?>" <?= ((int)$it['qty']) <= 1 ? 'disabled' : '' ?>>
+                                    <button type="button" class="js-dec"
+                                        data-product-id="<?= (int)$it['product_id'] ?>"
+                                        data-variant-id="<?= (int)$it['variant_id'] ?>"
+                                        <?= $currentQ <= 1 ? 'disabled' : '' ?>>
                                         <i class="bi bi-dash"></i>
                                     </button>
-                                    <span class="js-qty"><?= (int)$it['qty'] ?></span>
-                                    <button type="button" class="js-inc" data-product-id="<?= (int)$it['product_id'] ?>" data-variant-id="<?= (int)$it['variant_id'] ?>">
+                                    <span class="js-qty"><?= $currentQ ?></span>
+                                    <button type="button" class="js-inc"
+                                        data-product-id="<?= (int)$it['product_id'] ?>"
+                                        data-variant-id="<?= (int)$it['variant_id'] ?>"
+                                        <?= $isOOS ? 'disabled' : '' ?>>
                                         <i class="bi bi-plus"></i>
                                     </button>
                                 </div>
 
-                                <button type="button" class="ct-remove js-remove" data-product-id="<?= (int)$it['product_id'] ?>" data-variant-id="<?= (int)$it['variant_id'] ?>">
+                                <button type="button" class="ct-remove js-remove"
+                                    data-product-id="<?= (int)$it['product_id'] ?>"
+                                    data-variant-id="<?= (int)$it['variant_id'] ?>">
                                     <i class="bi bi-trash3"></i>
                                 </button>
 
@@ -550,10 +777,17 @@ foreach ($items as $it) {
                             <strong id="summaryTotal">₹<?= number_format($cartTotal, 0) ?></strong>
                         </div>
 
-                        <a href="<?= MAIN_URL ?>checkout.php" class="ct-checkout-btn" id="checkoutBtn">
-                            <i class="bi bi-shield-lock-fill"></i>
-                            Proceed to Checkout
-                        </a>
+                        <?php if ($hasAnyOOS): ?>
+                            <button type="button" class="ct-checkout-btn is-disabled" id="checkoutBtn" disabled>
+                                <i class="bi bi-exclamation-triangle-fill"></i>
+                                Remove Sold - Out Items
+                            </button>
+                        <?php else: ?>
+                            <a href="<?= MAIN_URL ?>checkout.php" class="ct-checkout-btn" id="checkoutBtn">
+                                <i class="bi bi-shield-lock-fill"></i>
+                                Proceed to Checkout
+                            </a>
+                        <?php endif; ?>
                     </aside>
 
                 </div>
@@ -563,7 +797,6 @@ foreach ($items as $it) {
         </div>
     </main>
 
-
     <?php include_once './includes/mobile-nav-bar.php'; ?>
     <?php include_once './includes/login-poup.php'; ?>
     <?php include_once './includes/register-poup.php'; ?>
@@ -571,13 +804,58 @@ foreach ($items as $it) {
     <div id="mmToast"></div>
 
     <?php include_once './includes/footer.php'; ?>
+
     <script>
         window.MAIN_URL = "<?= MAIN_URL ?>";
         window.IS_LOGGED_IN = <?= $customerId > 0 ? 'true' : 'false' ?>;
         window.CART_COUNT = <?= (int)$cartCount ?>;
+        window.HAS_OOS = <?= $hasAnyOOS ? 'true' : 'false' ?>;
     </script>
     <script src="<?= MAIN_URL ?>js/home.js"></script>
     <script src="<?= MAIN_URL ?>js/cart-page.js"></script>
+
+    <?php if ($hasAnyOOS): ?>
+        <script>
+            /* Safety net — if the button is somehow clickable, block it */
+            (function() {
+                var btn = document.getElementById("checkoutBtn");
+                if (!btn) return;
+                btn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+
+                    var t = document.getElementById("mmToast");
+                    if (!t) {
+                        t = document.createElement("div");
+                        t.id = "mmToast";
+                        document.body.appendChild(t);
+                    }
+                    t.textContent = "Please remove sold-out items to continue.";
+                    t.className = "show error";
+                    clearTimeout(t._t);
+                    t._t = setTimeout(function() {
+                        t.className = "";
+                    }, 2600);
+                }, true);
+            })();
+        </script>
+    <?php endif; ?>
+
+    <?php if (!$hasAnyOOS && !empty($items)): ?>
+        <script>
+            /* Quiet auto-refresh every 20s to catch stock changes live.
+           Stops refreshing once any OOS is detected (page will reload itself
+           with the sold-out state and refresh loop won't trigger). */
+            (function() {
+                setTimeout(function() {
+                    if (document.activeElement &&
+                        /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+                    if (window.HAS_OOS) return;
+                    window.location.reload();
+                }, 20000);
+            })();
+        </script>
+    <?php endif; ?>
 
 </body>
 

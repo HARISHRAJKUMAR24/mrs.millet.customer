@@ -249,15 +249,11 @@ if ($customerRowId > 0) {
 
             $customerWalletBalance = (float)($cust['wallet_balance'] ?? 0);
 
-            /* =====================================================
-               ✅ FIX: Both address types now read delivery_charge
-               ===================================================== */
             if ($customerAddressType === 'individual_house') {
                 $customerFullAddress = $customerAddress['full_address'] ?? '';
                 $customerMapLink     = $customerAddress['map_link']     ?? '';
                 $customerHouseImage  = $customerAddress['house_image']  ?? '';
 
-                /* Individual house: prefer delivery_charge, fall back to charge */
                 $customerDivisionCharge = (float)(
                     $customerAddress['delivery_charge']
                     ?? $customerAddress['charge']
@@ -269,7 +265,6 @@ if ($customerRowId > 0) {
                 $customerApartmentName  = $customerAddress['apartment_name'] ?? '';
                 $customerDivision       = $customerAddress['division_label'] ?? '';
 
-                /* Apartment: prefer delivery_charge, fall back to charge */
                 $customerDivisionCharge = (float)(
                     $customerAddress['delivery_charge']
                     ?? $customerAddress['charge']
@@ -349,6 +344,147 @@ if ($cartCount <= 0) {
 }
 
 /* =========================================================
+   LIVE STOCK CHECK — mark per-row stock status
+   ========================================================= */
+$cartStock = []; // key: menu_code|product_code|variant_id => ['unlimited','count','oos']
+
+if (!empty($cart)) {
+    $rowsByMenu = [];
+    foreach ($cart as $c) {
+        $mc = trim((string)($c['menu_code'] ?? ''));
+        if ($mc === '') continue;
+        $rowsByMenu[$mc][] = $c;
+    }
+
+    foreach ($rowsByMenu as $mc => $rows) {
+        try {
+            $productCodes = array_unique(array_filter(array_map(
+                fn($r) => trim((string)($r['code'] ?? '')),
+                $rows
+            )));
+            if (empty($productCodes)) continue;
+
+            $in = implode(',', array_fill(0, count($productCodes), '?'));
+            $sStmt = $pdo->prepare(
+                "SELECT mp.product_code, mp.variant_id,
+                        COALESCE(mp.stock_unlimited,0) AS stock_unlimited,
+                        COALESCE(mp.stock_count,0)     AS stock_count
+                 FROM menu_products mp
+                 WHERE mp.menu_code = ? AND mp.product_code IN ($in)"
+            );
+            $sStmt->execute(array_merge([$mc], $productCodes));
+
+            while ($s = $sStmt->fetch(PDO::FETCH_ASSOC)) {
+                $key = $mc . '|' . $s['product_code'] . '|' . (int)$s['variant_id'];
+                $unlimited = (int)$s['stock_unlimited'] === 1;
+                $count     = (int)$s['stock_count'];
+                $cartStock[$key] = [
+                    'unlimited' => $unlimited,
+                    'count'     => $count,
+                    'oos'       => (!$unlimited && $count <= 0),
+                ];
+            }
+        } catch (PDOException $e) {
+        }
+    }
+}
+
+function checkoutRowStock(array $row, array $cartStock): array
+{
+    $mc   = trim((string)($row['menu_code'] ?? ''));
+    $code = trim((string)($row['code']      ?? ''));
+    $vid  = (int)($row['variant_id'] ?? 0);
+
+    if ($mc === '' || $code === '' || $vid <= 0) {
+        return ['unlimited' => true, 'count' => 9999, 'oos' => false];
+    }
+    $key = $mc . '|' . $code . '|' . $vid;
+    if (isset($cartStock[$key])) return $cartStock[$key];
+    return ['unlimited' => true, 'count' => 9999, 'oos' => false];
+}
+
+/* Flag every row + global OOS flag */
+$hasAnyOOS = false;
+foreach ($cart as &$lineRef) {
+    $s = checkoutRowStock($lineRef, $cartStock);
+    $lineRef['stock_oos']       = !empty($s['oos']);
+    $lineRef['stock_unlimited'] = !empty($s['unlimited']);
+    $lineRef['stock_count']     = (int)$s['count'];
+    if ($lineRef['stock_oos']) $hasAnyOOS = true;
+}
+unset($lineRef);
+
+/* =========================================================
+   MIXED-MENU GUARD
+   ========================================================= */
+$menuCodesInCart = [];
+foreach ($cart as $c) {
+    $mc = trim((string)($c['menu_code'] ?? ''));
+    if ($mc !== '') $menuCodesInCart[$mc] = true;
+}
+
+$menuMetaByCode    = [];
+$mixedMenuBlockMsg = '';
+$hasMixedMenus     = false;
+$menuLabelByCode   = [];
+
+if (count($menuCodesInCart) > 1) {
+    try {
+        $in = implode(',', array_fill(0, count($menuCodesInCart), '?'));
+        $mStmt = $pdo->prepare(
+            "SELECT menu_code, menu_name, start_at, end_at
+             FROM menus WHERE menu_code IN ($in)"
+        );
+        $mStmt->execute(array_keys($menuCodesInCart));
+        foreach ($mStmt->fetchAll(PDO::FETCH_ASSOC) as $m) {
+            $menuMetaByCode[$m['menu_code']] = $m;
+        }
+    } catch (PDOException $e) {
+    }
+
+    $todayDate    = date('Y-m-d');
+    $tomorrowDate = date('Y-m-d', strtotime('+1 day'));
+
+    $menuDayGroup = [];
+    foreach ($menuMetaByCode as $code => $m) {
+        $endDate = !empty($m['end_at']) ? date('Y-m-d', strtotime($m['end_at'])) : '';
+        if ($endDate === $todayDate) {
+            $menuDayGroup[$code]     = 'today';
+            $menuLabelByCode[$code]  = "Today's Menu";
+        } elseif ($endDate === $tomorrowDate) {
+            $menuDayGroup[$code]     = 'tomorrow';
+            $menuLabelByCode[$code]  = "Tomorrow's Menu";
+        } else {
+            $menuDayGroup[$code]     = 'other';
+            $menuLabelByCode[$code]  = $m['menu_name'] ?? 'Menu';
+        }
+    }
+
+    $uniqueDays = array_unique(array_values($menuDayGroup));
+    if (count($uniqueDays) > 1) {
+        $hasMixedMenus = true;
+
+        $todayInCart    = in_array('today', $menuDayGroup, true);
+        $tomorrowInCart = in_array('tomorrow', $menuDayGroup, true);
+
+        if ($todayInCart && $tomorrowInCart) {
+            $mixedMenuBlockMsg = "You have items from both Today's menu and Tomorrow's menu in your cart. "
+                . "Please keep only one menu's items to continue checkout.";
+        } else {
+            $mixedMenuBlockMsg = "Your cart contains items from multiple menus. "
+                . "Please keep products from a single menu to continue.";
+        }
+    }
+}
+
+/* Clear time-offer if mixed */
+$appliedDiscount = $_SESSION['applied_discount'] ?? null;
+if ($hasMixedMenus && is_array($appliedDiscount) && ($appliedDiscount['type'] ?? '') === 'time') {
+    unset($_SESSION['applied_discount']);
+    $appliedDiscount = null;
+}
+
+/* =========================================================
    CONTAINER DEPOSIT
    ========================================================= */
 $containerTotal  = 0;
@@ -387,7 +523,7 @@ if (!empty($cart)) {
 $containerTotalRound = (int)round($containerTotal);
 
 /* =========================================================
-   DISCOUNT CALCULATION — CHOSEN + LOYALTY
+   DISCOUNT CALCULATION
    ========================================================= */
 $totalDiscountAmount  = 0;
 $discountLabels       = [];
@@ -411,7 +547,7 @@ if (is_array($appliedDiscount) && !empty($appliedDiscount['type']) && !empty($ap
             $appliedDiscountType = '';
             $appliedDiscountCode = '';
         }
-    } elseif ($appliedDiscountType === 'time') {
+    } elseif ($appliedDiscountType === 'time' && !$hasMixedMenus) {
         $menuCode     = $appliedDiscountCode;
         $menuSubtotal = 0;
         foreach ($cart as $c) {
@@ -473,10 +609,13 @@ if (is_array($appliedDiscount) && !empty($appliedDiscount['type']) && !empty($ap
             $appliedDiscountType = '';
             $appliedDiscountCode = '';
         }
+    } elseif ($appliedDiscountType === 'time' && $hasMixedMenus) {
+        unset($_SESSION['applied_discount']);
+        $appliedDiscountType = '';
+        $appliedDiscountCode = '';
     }
 }
 
-// Loyalty always auto
 $loyaltyDiscount = getCustomerLoyaltyDiscount($pdo, $customerRowId);
 $loyaltyAmount   = 0;
 if ($loyaltyDiscount) {
@@ -510,10 +649,12 @@ $discountAmountRound     = (int)round($totalDiscountAmount);
 $discountedSubtotal      = max(0, $cartTotal - $discountAmountRound);
 $discountedSubtotalRound = (int)round($discountedSubtotal);
 
-/* =========================================================
-   INLINE OFFERS LIST
-   ========================================================= */
 $availableOffers = getAvailableOffers($pdo);
+if ($hasMixedMenus) {
+    $availableOffers = array_values(array_filter($availableOffers, function ($off) {
+        return ($off['type'] ?? '') !== 'time';
+    }));
+}
 
 /* =========================================================
    TAX
@@ -537,7 +678,7 @@ if ($taxStatus === 1 && $taxRate > 0) {
 }
 
 /* =========================================================
-   WALLET + PAYABLE (initial server-side preview; JS recomputes)
+   WALLET + PAYABLE
    ========================================================= */
 $walletBalance      = (float)$customerWalletBalance;
 $walletApplied      = min($walletBalance, $foodPlusTax + $customerDivisionCharge);
@@ -546,6 +687,9 @@ $walletAppliedRound = (int)round($walletApplied);
 $payableNowRound    = (int)round($payableNow);
 
 $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
+
+/* Any blocker → disable pay */
+$checkoutBlocked = ($hasMixedMenus || $hasAnyOOS);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1213,6 +1357,206 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
             background: #b51f2c;
             color: #fff;
         }
+
+        /* MIXED-MENU WARNING */
+        .mm-mixed-warn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            gap: 10px;
+            padding: 22px 18px;
+            border-radius: 16px;
+            background: linear-gradient(135deg, #fde7e9 0%, #fbd5d9 100%);
+            border: 1.5px solid #e57373;
+            color: #7a1220;
+            margin: 16px 0;
+            box-shadow: 0 4px 14px rgba(181, 31, 44, .08);
+        }
+
+        .mm-mixed-warn-icon {
+            width: 46px;
+            height: 46px;
+            border-radius: 50%;
+            background: #b51f2c;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            box-shadow: 0 4px 10px rgba(181, 31, 44, .35);
+        }
+
+        .mm-mixed-warn-body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .mm-mixed-warn-title {
+            font-size: 14px;
+            font-weight: 800;
+            margin: 0;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+        }
+
+        .mm-mixed-warn-msg {
+            font-size: 12.5px;
+            line-height: 1.5;
+            font-weight: 600;
+            max-width: 340px;
+            color: #7a1220;
+        }
+
+        .mm-mixed-warn-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            margin-top: 8px;
+            padding: 10px 18px;
+            background: #b51f2c;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+            text-decoration: none;
+            border-radius: 10px;
+            border: 1.5px solid #b51f2c;
+            transition: .18s ease;
+            box-shadow: 0 3px 8px rgba(181, 31, 44, .25);
+        }
+
+        .mm-mixed-warn-btn:hover {
+            background: #8e1722;
+            border-color: #8e1722;
+            color: #fff;
+            transform: translateY(-1px);
+            box-shadow: 0 5px 12px rgba(181, 31, 44, .35);
+        }
+
+        .mm-mixed-warn-btn:active {
+            transform: translateY(0);
+        }
+
+        .mm-mixed-warn-btn svg {
+            stroke: currentColor;
+        }
+
+        /* OUT-OF-STOCK summary row */
+        .mm-co-item.is-oos {
+            background: #fdfaf4;
+        }
+
+        .mm-co-item.is-oos .mm-co-item-name,
+        .mm-co-item.is-oos .mm-co-item-price {
+            color: #a19a90;
+        }
+
+        .mm-oos-chip {
+            display: inline-block;
+            margin-left: 6px;
+            padding: 1px 7px;
+            font-size: 9.5px;
+            font-weight: 800;
+            letter-spacing: .05em;
+            text-transform: uppercase;
+            color: #b51f2c;
+            background: #fde6e6;
+            border: 1px solid #f3c8cc;
+            border-radius: 4px;
+            vertical-align: middle;
+        }
+
+        /* OUT-OF-STOCK checkout warning */
+        .mm-oos-warn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            gap: 10px;
+            padding: 22px 18px;
+            border-radius: 16px;
+            background: linear-gradient(135deg, #fef1dc 0%, #fbe3c6 100%);
+            border: 1.5px solid #e5a83a;
+            color: #7a4a12;
+            margin: 16px 0;
+            box-shadow: 0 4px 14px rgba(181, 106, 31, .08);
+        }
+
+        .mm-oos-warn-icon {
+            width: 46px;
+            height: 46px;
+            border-radius: 50%;
+            background: #b8893c;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            box-shadow: 0 4px 10px rgba(184, 137, 60, .35);
+        }
+
+        .mm-oos-warn-body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .mm-oos-warn-title {
+            font-size: 14px;
+            font-weight: 800;
+            margin: 0;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+        }
+
+        .mm-oos-warn-msg {
+            font-size: 12.5px;
+            line-height: 1.5;
+            font-weight: 600;
+            max-width: 340px;
+            color: #7a4a12;
+        }
+
+        .mm-oos-warn-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            margin-top: 8px;
+            padding: 10px 18px;
+            background: #b8893c;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+            text-decoration: none;
+            border-radius: 10px;
+            border: 1.5px solid #b8893c;
+            transition: .18s ease;
+            box-shadow: 0 3px 8px rgba(184, 137, 60, .25);
+        }
+
+        .mm-oos-warn-btn:hover {
+            background: #8e6a2a;
+            border-color: #8e6a2a;
+            color: #fff;
+            transform: translateY(-1px);
+            box-shadow: 0 5px 12px rgba(184, 137, 60, .35);
+        }
+
+        .mm-co-pay-btn:disabled {
+            opacity: .55 !important;
+            cursor: not-allowed !important;
+            background: #d8d2c9 !important;
+            color: #817a71 !important;
+        }
     </style>
 </head>
 
@@ -1376,7 +1720,6 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                             <input type="hidden" id="coFullAddress" value="<?= htmlspecialchars($customerFullAddress) ?>">
                             <input type="hidden" id="coMapLink" value="<?= htmlspecialchars($customerMapLink) ?>">
                             <input type="hidden" id="coHouseImage" value="<?= htmlspecialchars($customerHouseImage) ?>">
-                            <!-- ✅ hidden field so JS can read the house delivery charge -->
                             <input type="hidden" id="coDivisionCharge" value="<?= (float)$customerDivisionCharge ?>">
 
                         <?php elseif ($customerLoggedIn && $customerApartmentId > 0): ?>
@@ -1451,15 +1794,21 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                     <div class="mm-co-items">
                         <?php foreach ($cart as $item):
                             $lineTotal = ((float)$item['price']) * ((int)$item['qty']);
+                            $itemOOS   = !empty($item['stock_oos']);
                         ?>
-                            <div class="mm-co-item">
+                            <div class="mm-co-item <?= $itemOOS ? 'is-oos' : '' ?>">
                                 <div class="mm-co-item-thumb">
                                     <?php if (!empty($item['image'])): ?>
                                         <img src="<?= htmlspecialchars($item['image']) ?>" alt="">
                                     <?php endif; ?>
                                 </div>
                                 <div class="mm-co-item-info">
-                                    <p class="mm-co-item-name"><?= htmlspecialchars($item['name'] ?? '') ?></p>
+                                    <p class="mm-co-item-name">
+                                        <?= htmlspecialchars($item['name'] ?? '') ?>
+                                        <?php if ($itemOOS): ?>
+                                            <span class="mm-oos-chip">Sold Out</span>
+                                        <?php endif; ?>
+                                    </p>
                                     <p class="mm-co-item-meta">
                                         <?= htmlspecialchars($item['variant_name'] ?? '') ?> · Qty <?= (int)$item['qty'] ?>
                                     </p>
@@ -1474,7 +1823,11 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                             <div class="mm-offers-icon"><i class="bi bi-ticket-perforated-fill"></i></div>
                             <div>
                                 <p class="mm-offers-title">Coupons &amp; Offers</p>
-                                <p class="mm-offers-sub">Choose one below</p>
+                                <p class="mm-offers-sub">
+                                    <?= $hasMixedMenus
+                                        ? 'Coupons only — time offers blocked (mixed menus)'
+                                        : 'Choose one below' ?>
+                                </p>
                             </div>
                         </div>
 
@@ -1595,12 +1948,62 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
                         </div>
                     <?php endif; ?>
 
-                    <button type="button" id="payNowBtn" class="mm-co-pay-btn">
+                    <?php if ($hasMixedMenus): ?>
+                        <div class="mm-mixed-warn" id="mixedMenuWarn">
+                            <div class="mm-mixed-warn-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
+                                    <path d="M12 9v4" />
+                                    <path d="M12 17h.01" />
+                                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                                </svg>
+                            </div>
+                            <div class="mm-mixed-warn-body">
+                                <div class="mm-mixed-warn-title">Cannot mix menus</div>
+                                <div class="mm-mixed-warn-msg">
+                                    <?= htmlspecialchars($mixedMenuBlockMsg) ?>
+                                </div>
+                                <a href="cart.php" class="mm-mixed-warn-btn">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+                                        <path d="M19 12H5" />
+                                        <path d="M12 19l-7-7 7-7" />
+                                    </svg>
+                                    Go to Cart &amp; Fix
+                                </a>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+
+                    <?php if ($hasAnyOOS): ?>
+                        <div class="mm-oos-warn" id="oosWarn">
+                            <div class="mm-oos-warn-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4" />
+                                    <path d="M12 16h.01" />
+                                </svg>
+                            </div>
+                            <div class="mm-oos-warn-body">
+                                <div class="mm-oos-warn-title">Item Out of Stock</div>
+                                <div class="mm-oos-warn-msg">
+                                    Some products in your cart are currently sold out. Please remove them to proceed.
+                                </div>
+                                <a href="cart.php" class="mm-oos-warn-btn">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+                                        <path d="M19 12H5" />
+                                        <path d="M12 19l-7-7 7-7" />
+                                    </svg>
+                                    Go to Cart &amp; Fix
+                                </a>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+
+                    <button type="button" id="payNowBtn" class="mm-co-pay-btn" <?= $checkoutBlocked ? 'disabled' : '' ?>>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                             <rect x="2" y="5" width="20" height="14" rx="2" />
                             <path d="M2 10h20" />
                         </svg>
-                        <span id="payNowText">Pay Now</span>
+                        <span id="payNowText"><?= $checkoutBlocked ? 'Fix cart to pay' : 'Pay Now' ?></span>
                     </button>
                 </aside>
 
@@ -1657,10 +2060,68 @@ $razorpayKeyId = $settings['razorpay_key_id'] ?? '';
             type: "<?= htmlspecialchars($taxType) ?>"
         };
         window.TAX_AMOUNT_INITIAL = <?= (int)$taxAmountRound ?>;
+
+        window.MIXED_MENUS_LOCKED = <?= $hasMixedMenus ? 'true' : 'false' ?>;
+        window.OOS_LOCKED = <?= $hasAnyOOS ? 'true' : 'false' ?>;
     </script>
 
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script src="<?= MAIN_URL ?>js/checkout.js"></script>
+
+    <!-- Extra hard guard — Pay Now + time-offer blocked when mixed/OOS -->
+    <script>
+        (function() {
+            var payBtn = document.getElementById("payNowBtn");
+
+            function toast(msg) {
+                var t = document.getElementById("mmToast");
+                if (!t) {
+                    t = document.createElement("div");
+                    t.id = "mmToast";
+                    document.body.appendChild(t);
+                }
+                t.textContent = msg;
+                t.className = "show error";
+                clearTimeout(t._t);
+                t._t = setTimeout(function() {
+                    t.className = "";
+                }, 2600);
+            }
+
+            if (window.MIXED_MENUS_LOCKED && payBtn) {
+                payBtn.disabled = true;
+                payBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    toast("Mixed menus — please keep items from a single menu.");
+                }, true);
+            }
+
+            if (window.OOS_LOCKED && payBtn) {
+                payBtn.disabled = true;
+                payBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    toast("Some items are sold out — please fix your cart.");
+                }, true);
+            }
+
+            if (window.MIXED_MENUS_LOCKED) {
+                var applyBtn = document.getElementById("offerApplyBtn");
+                if (applyBtn) {
+                    applyBtn.addEventListener("click", function(e) {
+                        var picked = document.querySelector('input[name="mm_offer_pick"]:checked');
+                        var code = picked ? picked.value : '';
+                        if (code && code.indexOf('TIME:') === 0) {
+                            e.preventDefault();
+                            e.stopImmediatePropagation();
+                            toast("Time offers cannot be used with a mixed cart.");
+                        }
+                    }, true);
+                }
+            }
+        })();
+    </script>
 
 </body>
 

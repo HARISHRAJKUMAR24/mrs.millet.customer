@@ -1,6 +1,6 @@
 /* =========================================================
    MRS MILL@ — CUSTOMER STORE
-   File: ./js/home.js   (v2026-11-13b)
+   File: ./js/home.js   (v2026-11-16c — OOS-safe add-to-cart)
    ========================================================= */
 
 (function () {
@@ -81,10 +81,8 @@
     const regHouseLandmark = document.getElementById("regHouseLandmark");
     const regHouseLandmark2 = document.getElementById("regHouseLandmark2");
 
-    // ✅ Apartment Full Address
     const regAptAddress = document.getElementById("regAptAddress");
 
-    // APARTMENT MAP & IMAGE ELEMENTS
     const regAptMap = document.getElementById("regAptMap");
     const regAptLocBtn = document.getElementById("regAptLocBtn");
     const regAptLocText = document.getElementById("regAptLocBtnText");
@@ -96,7 +94,6 @@
     const regAptImgDrop = document.getElementById("regAptImgDrop");
     const regAptImgPrev = document.getElementById("regAptImgPreview");
 
-    // HOUSE MAP & IMAGE ELEMENTS
     const regBtn = document.getElementById("registerBtn");
     const regBtnText = document.getElementById("registerBtnText");
     const regClose = document.getElementById("registerClose");
@@ -355,11 +352,7 @@
     if (btnAptMode) btnAptMode.addEventListener("click", () => setRegMode("apartment"));
     if (btnHouseMode) btnHouseMode.addEventListener("click", () => setRegMode("individual_house"));
 
-    /* =========================================================
-       ✅ LOCATION HELPERS (shared by Apartment & House)
-       ========================================================= */
     function setLocState(opts) {
-        // opts: { input, btn, btnText, hint, actions, editBtn, undoBtn, link, hasLink }
         const { input, btn, btnText, hint, actions } = opts;
         if (opts.hasLink) {
             if (input) input.value = opts.link || "";
@@ -399,7 +392,6 @@
         );
     }
 
-    // ---- Apartment location wiring ----
     if (regAptLocBtn) {
         regAptLocBtn.addEventListener("click", function () {
             requestLocation({
@@ -411,10 +403,7 @@
     }
     if (regAptLocEdit) {
         regAptLocEdit.addEventListener("click", function () {
-            // Open Google Maps so user can verify / edit in a new tab
-            if (state.regAptMapLink) {
-                window.open(state.regAptMapLink, "_blank");
-            }
+            if (state.regAptMapLink) { window.open(state.regAptMapLink, "_blank"); }
         });
     }
     if (regAptLocUndo) {
@@ -427,7 +416,6 @@
         });
     }
 
-    // ---- House location wiring ----
     if (regHouseLocBtn) {
         regHouseLocBtn.addEventListener("click", function () {
             requestLocation({
@@ -439,9 +427,7 @@
     }
     if (regHouseLocEdit) {
         regHouseLocEdit.addEventListener("click", function () {
-            if (state.regHouseMapLink) {
-                window.open(state.regHouseMapLink, "_blank");
-            }
+            if (state.regHouseMapLink) { window.open(state.regHouseMapLink, "_blank"); }
         });
     }
     if (regHouseLocUndo) {
@@ -454,7 +440,6 @@
         });
     }
 
-    // Apartment Image Upload
     if (regAptImgDrop) regAptImgDrop.addEventListener("click", () => { if (regAptImg) regAptImg.click(); });
     if (regAptImg) {
         regAptImg.addEventListener("change", function () {
@@ -474,7 +459,6 @@
         });
     }
 
-    // House Image Upload
     if (regHouseImgDrop) regHouseImgDrop.addEventListener("click", () => { if (regHouseImg) regHouseImg.click(); });
     if (regHouseImg) {
         regHouseImg.addEventListener("change", function () {
@@ -520,7 +504,6 @@
         if (regHouseLandmark) regHouseLandmark.value = "";
         if (regHouseLandmark2) regHouseLandmark2.value = "";
 
-        // Reset apartment location UI
         state.regAptMapLink = "";
         setLocState({
             input: regAptMap, btn: regAptLocBtn, btnText: regAptLocText,
@@ -533,7 +516,6 @@
         }
         state.regAptImgData = "";
 
-        // Reset house location UI
         if (regHouseAddress) regHouseAddress.value = "";
         state.regHouseMapLink = "";
         setLocState({
@@ -756,9 +738,6 @@
         });
     }
 
-    /* =========================================================
-       REGISTER SUBMIT
-       ========================================================= */
     if (regForm) {
         regForm.addEventListener("submit", function (e) {
             e.preventDefault();
@@ -863,7 +842,7 @@
     }
 
     /* =========================================================
-       PRODUCT CARDS & CART
+       PRODUCT CARDS & CART (STOCK-AWARE + OOS-SAFE)
        ========================================================= */
     const productCards = document.querySelectorAll(".js-product-card");
 
@@ -898,16 +877,33 @@
                     variantsBox.innerHTML = '<div class="mm-variants-loading">No variants.</div>';
                     return;
                 }
+
+                let anyAvailable = false;
+
                 variantsBox.innerHTML = variants.map(v => {
                     const qtyLabel = v.quantity_name || (v.quantity + " " + (v.quantity_unit || ""));
                     const cartQty = Number(v.cart_qty || 0);
+                    const isUnlimited = Number(v.stock_unlimited) === 1;
+                    const maxStock = isUnlimited ? 9999 : Math.max(0, Number(v.stock_count) || 0);
+                    const available = isUnlimited ? 9999 : Math.max(0, maxStock - cartQty);
+                    const isOOS = !isUnlimited && available <= 0;
+
+                    if (!isOOS) anyAvailable = true;
+
                     return `
-                        <div class="mm-variant-row" data-variant-id="${(v.id)}" data-price="${Number(v.price)}" data-original="${cartQty}">
-                            <span class="mm-variant-label">${escapeHtml(qtyLabel)}</span>
-                            <div class="mm-qty" data-qty="${cartQty}">
-                                <button type="button" class="js-qty-minus" ${cartQty === 0 ? "disabled" : ""}>−</button>
-                                <span class="mm-qty-val">${cartQty}</span>
-                                <button type="button" class="js-qty-plus">+</button>
+                        <div class="mm-variant-row ${isOOS ? 'is-out-of-stock' : ''}"
+                             data-variant-id="${v.id}"
+                             data-price="${Number(v.price)}"
+                             data-original="${cartQty}"
+                             data-max-stock="${isUnlimited ? 9999 : maxStock}">
+                            <span class="mm-variant-label">
+                                ${escapeHtml(qtyLabel)}
+                                ${isOOS ? '<span class="mm-oos-badge">Sold Out</span>' : ''}
+                            </span>
+                            <div class="mm-qty" data-qty="${isOOS ? 0 : cartQty}" ${isOOS ? 'style="display:none"' : ''}>
+                                <button type="button" class="js-qty-minus" ${cartQty === 0 || isOOS ? "disabled" : ""}>−</button>
+                                <span class="mm-qty-val">${isOOS ? 0 : cartQty}</span>
+                                <button type="button" class="js-qty-plus" ${isOOS || cartQty >= maxStock ? "disabled" : ""}>+</button>
                             </div>
                             <span class="mm-variant-price">Rs. ${Number(v.price).toFixed(0)}</span>
                         </div>
@@ -915,29 +911,49 @@
                 }).join("");
 
                 variantsBox.querySelectorAll(".mm-variant-row").forEach(row => {
+                    if (row.classList.contains("is-out-of-stock")) return;
+
                     const minus = row.querySelector(".js-qty-minus");
                     const plus = row.querySelector(".js-qty-plus");
                     const valEl = row.querySelector(".mm-qty-val");
                     const box = row.querySelector(".mm-qty");
-                    plus.addEventListener("click", () => {
+                    const maxStock = Number(row.dataset.maxStock);
+
+                    if (plus) plus.addEventListener("click", () => {
                         let q = Number(box.dataset.qty || 0);
-                        q++;
-                        box.dataset.qty = q;
-                        valEl.textContent = q;
-                        minus.disabled = false;
-                        updateCardState(card);
+                        if (q < maxStock) {
+                            q++;
+                            box.dataset.qty = q;
+                            valEl.textContent = q;
+                            if (minus) minus.disabled = false;
+                            if (q >= maxStock) plus.disabled = true;
+                            updateCardState(card);
+                        }
                     });
-                    minus.addEventListener("click", () => {
+
+                    if (minus) minus.addEventListener("click", () => {
                         let q = Number(box.dataset.qty || 0);
                         if (q > 0) q--;
                         box.dataset.qty = q;
                         valEl.textContent = q;
                         minus.disabled = q === 0;
+                        if (q < maxStock) plus.disabled = false;
                         updateCardState(card);
                     });
                 });
 
-                updateCardState(card);
+                const addBtn = card.querySelector(".js-add-cart");
+                if (!anyAvailable && addBtn) {
+                    card.classList.add("is-sold-out-all");
+                    addBtn.disabled = true;
+                    addBtn.classList.add("is-sold-out");
+                    const lbl = addBtn.querySelector("span");
+                    if (lbl) lbl.textContent = "SOLD OUT";
+                } else {
+                    card.classList.remove("is-sold-out-all");
+                    if (addBtn) addBtn.classList.remove("is-sold-out");
+                    updateCardState(card);
+                }
             })
             .catch(() => {
                 variantsBox.innerHTML = '<div class="mm-variants-loading">Error.</div>';
@@ -946,12 +962,27 @@
 
     function updateCardState(card) {
         const btn = card.querySelector(".js-add-cart");
-        const btnText = btn ? btn.querySelector("span") : null;
         if (!btn) return;
+        const btnText = btn.querySelector("span");
         const rows = card.querySelectorAll(".mm-variant-row");
+
+        const allOOS = rows.length > 0 && Array.from(rows).every(r => r.classList.contains("is-out-of-stock"));
+        if (allOOS) {
+            card.classList.add("is-sold-out-all");
+            btn.disabled = true;
+            btn.classList.add("is-sold-out");
+            if (btnText) btnText.textContent = "SOLD OUT";
+            return;
+        }
+
+        card.classList.remove("is-sold-out-all");
+
         let anyChanged = false, anyQty = false;
         rows.forEach(row => {
-            const cur = Number(row.querySelector(".mm-qty").dataset.qty || 0);
+            if (row.classList.contains("is-out-of-stock")) return;
+            const qtyBox = row.querySelector(".mm-qty");
+            if (!qtyBox) return;
+            const cur = Number(qtyBox.dataset.qty || 0);
             const orig = Number(row.dataset.original || 0);
             if (cur > 0) anyQty = true;
             if (cur !== orig) anyChanged = true;
@@ -991,15 +1022,26 @@
             const productId = Number(card.dataset.productId || 0);
             const menuCode = card.dataset.menuCode || "";
             const rows = card.querySelectorAll(".mm-variant-row");
+
             const items = [];
             rows.forEach(row => {
-                const qty = Number(row.querySelector(".mm-qty").dataset.qty || 0);
+                if (row.classList.contains("is-out-of-stock")) return;
+                const qtyBox = row.querySelector(".mm-qty");
+                if (!qtyBox) return;
+                const qty = Number(qtyBox.dataset.qty || 0);
                 items.push({ variant_id: Number(row.dataset.variantId), qty: qty });
             });
 
+            if (items.length === 0) {
+                sToast("All variants are sold out.", "error");
+                updateCardState(card);
+                return;
+            }
+
             btn.disabled = true;
             btn.classList.add("adding");
-            btn.querySelector("span").textContent = "Saving…";
+            const lbl = btn.querySelector("span");
+            if (lbl) lbl.textContent = "Saving…";
 
             const fd = new FormData();
             fd.append("product_id", productId);
