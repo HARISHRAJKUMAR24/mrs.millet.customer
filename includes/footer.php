@@ -99,7 +99,10 @@ $currentYear = (int)date('Y');
 
             <div class="mm-footer-powered">
                 Powered by
-                <strong>One Mile Stone Technology Pvt Ltd</strong>
+                <strong>
+
+                    <a href="https://ztorespot.com/" target="_blank"><span class="mm-powered-mile">1 M<span class="mm-powered-one">i</span>le Stone Technology Solution Pvt Ltd</span></a>
+                </strong>
             </div>
         </div>
 
@@ -114,6 +117,7 @@ $currentYear = (int)date('Y');
         border-top: 1.5px solid #ece5da;
         font-family: "DM Sans", sans-serif;
         color: #302923;
+        /* padding-bottom: 20px; */
     }
 
     .mm-footer-inner {
@@ -213,11 +217,15 @@ $currentYear = (int)date('Y');
     }
 
     @media (max-width: 900px) {
-        .mm-footer-branches { grid-template-columns: repeat(2, 1fr); }
+        .mm-footer-branches {
+            grid-template-columns: repeat(2, 1fr);
+        }
     }
 
     @media (max-width: 560px) {
-        .mm-footer-branches { grid-template-columns: 1fr; }
+        .mm-footer-branches {
+            grid-template-columns: 1fr;
+        }
     }
 
     .mm-footer-branch {
@@ -237,7 +245,7 @@ $currentYear = (int)date('Y');
         box-shadow: 0 8px 20px rgba(48, 41, 35, .06);
     }
 
-    .mm-footer-branch > i {
+    .mm-footer-branch>i {
         width: 30px;
         height: 30px;
         border-radius: 9px;
@@ -304,20 +312,31 @@ $currentYear = (int)date('Y');
     }
 
     .mm-footer-powered strong {
-        color: #b51f2c;
         font-weight: 800;
     }
 
-    @media (max-width: 720px) {
-        .mm-footer-inner { padding: 18px 16px 10px; }
+    .mm-powered-one {
+        color: #cfcf18;
+    }
 
-        .mm-footer-logo { height: 44px; }
+    .mm-powered-mile {
+        color: #000000;
+    }
+
+    @media (max-width: 720px) {
+        .mm-footer-inner {
+            padding: 18px 16px 10px;
+        }
+
+        .mm-footer-logo {
+            height: 44px;
+        }
 
         .mm-footer-bottom {
             justify-content: center;
             text-align: center;
             gap: 4px;
-            padding: 8px 0 4px;
+            padding: 8px 0 40px;
         }
     }
 </style>
