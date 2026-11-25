@@ -18,8 +18,8 @@ if (!$customerLoggedIn) {
     exit;
 }
 
-$customerRowId = (int)$_SESSION['customer_id'];
-$customerName  = $_SESSION['customer_name']   ?? '';
+$customerRowId  = (int)$_SESSION['customer_id'];
+$customerName   = $_SESSION['customer_name']   ?? '';
 $customerMobile = $_SESSION['customer_mobile'] ?? '';
 
 $customerCode = (string)($_SESSION['customer_code'] ?? '');
@@ -94,6 +94,41 @@ try {
     $orders = [];
 }
 
+/* =========================================================
+   ✅ Collect all menu_codes referenced by these orders
+   and map them to menu_names via the `menus` table
+   ========================================================= */
+$allMenuCodes = [];
+foreach ($orders as $o) {
+    $items = json_decode($o['products_json'] ?? '[]', true);
+    if (is_array($items)) {
+        foreach ($items as $it) {
+            if (!empty($it['menu_code'])) {
+                $allMenuCodes[$it['menu_code']] = true;
+            }
+        }
+    }
+}
+$allMenuCodes = array_keys($allMenuCodes);
+
+$menuNameMap = [];
+if (!empty($allMenuCodes)) {
+    try {
+        $placeholders = implode(',', array_fill(0, count($allMenuCodes), '?'));
+        $ms = $pdo->prepare(
+            "SELECT menu_code, menu_name
+             FROM menus
+             WHERE menu_code IN ($placeholders)"
+        );
+        $ms->execute($allMenuCodes);
+        while ($mr = $ms->fetch(PDO::FETCH_ASSOC)) {
+            $menuNameMap[$mr['menu_code']] = $mr['menu_name'];
+        }
+    } catch (PDOException $e) {
+    }
+}
+
+/* Attach menu info + address to each order */
 foreach ($orders as &$o) {
     $addr = [];
     if (!empty($o['address_json'])) {
@@ -101,6 +136,21 @@ foreach ($orders as &$o) {
         if (is_array($decoded)) $addr = $decoded;
     }
     $o['_addr'] = $addr;
+
+    // ✅ Primary menu_code of this order (from first product)
+    $items = json_decode($o['products_json'] ?? '[]', true);
+    if (!is_array($items)) $items = [];
+
+    $primaryMenuCode = '';
+    foreach ($items as $it) {
+        if (!empty($it['menu_code'])) {
+            $primaryMenuCode = $it['menu_code'];
+            break;
+        }
+    }
+
+    $o['_menu_code'] = $primaryMenuCode;
+    $o['_menu_name'] = $primaryMenuCode !== '' ? ($menuNameMap[$primaryMenuCode] ?? '') : '';
 }
 unset($o);
 
@@ -405,6 +455,26 @@ if ($customerRowId > 0) {
             font-weight: 600;
         }
 
+        /* ✅ MENU BADGE */
+        .mo-menu-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: #eef4fd;
+            color: #1565c0;
+            font-size: 10.5px;
+            font-weight: 800;
+            letter-spacing: .03em;
+            border: 1px solid #cfe0f5;
+            white-space: nowrap;
+        }
+
+        .mo-menu-badge i {
+            font-size: 10.5px;
+        }
+
         .mo-order-head-right {
             display: flex;
             gap: 8px;
@@ -412,7 +482,6 @@ if ($customerRowId > 0) {
             flex-wrap: wrap;
         }
 
-        /* Cancel Button */
         .mo-cancel-btn {
             background: #fff;
             border: 1.5px solid #f1c8cc;
@@ -791,7 +860,6 @@ if ($customerRowId > 0) {
             pointer-events: none;
         }
 
-        /* Toast */
         .mm-toast {
             position: fixed;
             top: 84px;
@@ -819,7 +887,6 @@ if ($customerRowId > 0) {
             background: #b51f2c;
         }
 
-        /* Modal CSS */
         .mm-modal-overlay {
             position: fixed;
             inset: 0;
@@ -1078,7 +1145,10 @@ if ($customerRowId > 0) {
                             $boyName     = trim($o['delivery_boy_name'] ?? '');
                             $boyCode     = trim($o['delivery_boy_code'] ?? '');
 
-                            // Check if order can be cancelled (Must be pending)
+                            // ✅ Menu info
+                            $menuCode = $o['_menu_code'] ?? '';
+                            $menuName = $o['_menu_name'] ?? '';
+
                             $isPending = ($o['status'] === 'pending');
                         ?>
                             <div class="mo-order" id="order-card-<?= $o['id'] ?>">
@@ -1086,6 +1156,19 @@ if ($customerRowId > 0) {
                                 <div class="mo-order-head">
                                     <div class="mo-order-head-left">
                                         <span class="mo-order-code">#<?= htmlspecialchars($o['order_code']) ?></span>
+
+                                        <?php if ($menuName !== ''): ?>
+                                            <span class="mo-menu-badge" title="<?= htmlspecialchars($menuName) ?>">
+                                                <i class="bi bi-journal-text"></i>
+                                                <?= htmlspecialchars($menuName) ?>
+                                            </span>
+                                        <?php elseif ($menuCode !== ''): ?>
+                                            <span class="mo-menu-badge" title="<?= htmlspecialchars($menuCode) ?>">
+                                                <i class="bi bi-journal-text"></i>
+                                                <?= htmlspecialchars($menuCode) ?>
+                                            </span>
+                                        <?php endif; ?>
+
                                         <span class="mo-order-date">
                                             <i class="bi bi-clock"></i>
                                             <?= htmlspecialchars(formatOrderDate($o['created_at'])) ?>
@@ -1310,7 +1393,6 @@ if ($customerRowId > 0) {
         window.ADMIN_URL = "<?= ADMIN_URL ?>";
         window.IS_LOGGED_IN = <?= $customerLoggedIn ? 'true' : 'false' ?>;
 
-        // Cancel Order Logic
         document.addEventListener("DOMContentLoaded", function() {
             const cancelBtns = document.querySelectorAll(".mo-cancel-btn");
             const toast = document.getElementById("mmToast");
@@ -1342,7 +1424,6 @@ if ($customerRowId > 0) {
                 }
             }
 
-            // Open Modal on Cancel Click
             cancelBtns.forEach(btn => {
                 btn.addEventListener("click", function() {
                     activeOrderId = this.dataset.id;
@@ -1352,20 +1433,17 @@ if ($customerRowId > 0) {
                 });
             });
 
-            // Close Cancel Modal
             cancelNoBtn.addEventListener("click", closeCancelModal);
             cancelOverlay.addEventListener("click", function(e) {
                 if (e.target === cancelOverlay) closeCancelModal();
             });
 
-            // Confirm Cancel
             cancelYesBtn.addEventListener("click", function() {
                 if (!activeOrderId || !activeBtn) return;
 
                 cancelYesBtn.disabled = true;
                 cancelYesBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Cancelling...';
 
-                // Hide cancel modal instantly to show processing
                 cancelOverlay.classList.remove("show");
 
                 activeBtn.disabled = true;
@@ -1384,7 +1462,6 @@ if ($customerRowId > 0) {
                         cancelYesBtn.innerHTML = 'Yes, Cancel Order';
 
                         if (data.success) {
-                            // Show success popup
                             successMessage.innerHTML = data.message;
                             successOverlay.classList.add("show");
                             successOverlay.setAttribute("aria-hidden", "false");
@@ -1401,7 +1478,6 @@ if ($customerRowId > 0) {
                     });
             });
 
-            // Handle Success Modal OK
             successOkBtn.addEventListener("click", function() {
                 window.location.reload();
             });

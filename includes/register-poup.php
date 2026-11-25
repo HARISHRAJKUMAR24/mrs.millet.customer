@@ -165,7 +165,9 @@
                                 <path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 1 1 18 0z" />
                                 <circle cx="12" cy="10" r="3" />
                             </svg>
-                            <input type="text" class="cust-input" id="regAptMap" placeholder="Tap the button below to pin your location" maxlength="500" readonly>
+                            <input type="text" class="cust-input" id="regAptMap"
+                                placeholder="Tap button below or paste Google Maps link"
+                                maxlength="500">
                         </div>
                         <button type="button" class="loc-btn" id="regAptLocBtn">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;">
@@ -485,6 +487,8 @@
         border-radius: 12px;
         box-shadow: 0 15px 35px rgba(0, 0, 0, .12);
         z-index: 30;
+        z-index: 9999;
+        pointer-events: auto;
     }
 
     #regApartmentList .mm-co-dd-item,
@@ -641,5 +645,34 @@
 
     .cust-btn {
         margin-bottom: 10px;
+    }
+
+    /* in the popup <style> block already added above */
+    #regAptMap,
+    #regHouseMap {
+        background: #fffdf9 !important;
+        cursor: text !important;
+    }
+    /* The custom yellow warning item */
+    .mm-co-dd-item.mm-co-dd-custom {
+        background: #fff8e1;
+        border-left: 4px solid #d4a017;
+        padding: 12px 14px;
+        cursor: pointer;
+        /* Changed from default to pointer so users can click it */
+    }
+
+    .mm-co-dd-item.mm-co-dd-custom strong {
+        display: block;
+        color: #8a6d00;
+        font-size: 13px;
+        font-weight: 700;
+        margin-bottom: 2px;
+    }
+
+    .mm-co-dd-item.mm-co-dd-custom span {
+        font-size: 11px;
+        color: #a89655;
+        display: block;
     }
 </style>

@@ -1,6 +1,6 @@
 /* =========================================================
    MRS MILL@ — CUSTOMER STORE
-   File: ./js/home.js   (v2026-11-16c — OOS-safe add-to-cart)
+   File: ./js/home.js   (v2026-11-16e — login lookup fix + 10s request alert)
    ========================================================= */
 
 (function () {
@@ -11,6 +11,9 @@
 
     const Swal_ = (typeof window.Swal !== "undefined") ? window.Swal : null;
 
+    /* ---------------------------------------------------------
+       Toast
+       --------------------------------------------------------- */
     function sToast(msg, type) {
         type = type || "info";
         if (Swal_) {
@@ -30,21 +33,90 @@
         t._t = setTimeout(() => (t.className = ""), 2800);
     }
 
-    function sModal(title, html, icon) {
+    /* ---------------------------------------------------------
+       sModal — supports { timer, showConfirm, confirmText }
+       No alert() fallback.
+       --------------------------------------------------------- */
+    function sModal(title, html, icon, options) {
+        options = options || {};
+        const timer = Number(options.timer) || 0;
+        const showConfirm = options.showConfirm !== false;
+
         if (Swal_) {
-            return Swal_.fire({
-                title: title || "", html: html || "", icon: icon || "info",
-                confirmButtonColor: "#b51f2c", confirmButtonText: "OK",
-                allowOutsideClick: true, allowEscapeKey: true,
+            const cfg = {
+                title: title || "",
+                html: html || "",
+                icon: icon || "info",
+                confirmButtonColor: "#b51f2c",
+                confirmButtonText: options.confirmText || "OK",
+                allowOutsideClick: true,
+                allowEscapeKey: true,
                 customClass: { container: 'swal-high-z-index' }
-            });
+            };
+            if (timer > 0) {
+                cfg.timer = timer;
+                cfg.timerProgressBar = true;
+                cfg.showConfirmButton = showConfirm;
+            } else if (!showConfirm) {
+                cfg.showConfirmButton = false;
+            }
+            return Swal_.fire(cfg);
         }
-        alert((title || "") + "\n\n" + String(html || "").replace(/<[^>]+>/g, ""));
-        return Promise.resolve();
+
+        // No-Swal fallback modal (never alert())
+        return new Promise(function (resolve) {
+            const existing = document.getElementById("mmFallbackModal");
+            if (existing) existing.remove();
+
+            const overlay = document.createElement("div");
+            overlay.id = "mmFallbackModal";
+            overlay.style.cssText =
+                "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;" +
+                "display:flex;align-items:center;justify-content:center;padding:16px;";
+
+            const card = document.createElement("div");
+            card.style.cssText =
+                "background:#fff;border-radius:16px;max-width:420px;width:100%;" +
+                "padding:24px;box-shadow:0 20px 60px rgba(0,0,0,.3);" +
+                "font-family:inherit;text-align:center;";
+
+            card.innerHTML =
+                '<h3 style="margin:0 0 10px;color:#302923;font-size:18px;">' +
+                String(title || "") + '</h3>' +
+                '<div style="color:#6f675f;font-size:13px;line-height:1.55;">' +
+                String(html || "") + '</div>';
+
+            if (showConfirm || timer === 0) {
+                const btn = document.createElement("button");
+                btn.textContent = options.confirmText || "OK";
+                btn.style.cssText =
+                    "margin-top:18px;padding:10px 22px;border:0;border-radius:10px;" +
+                    "background:#b51f2c;color:#fff;font-weight:700;cursor:pointer;";
+                btn.onclick = () => { overlay.remove(); resolve(); };
+                card.appendChild(btn);
+            }
+
+            overlay.appendChild(card);
+            document.body.appendChild(overlay);
+
+            if (timer > 0) {
+                setTimeout(() => { overlay.remove(); resolve(); }, timer);
+            }
+        });
+    }
+
+    /* Auto-close helper (default 10s) */
+    function sModalAuto(title, html, icon, seconds) {
+        return sModal(title, html, icon || "success", {
+            timer: (Number(seconds) || 10) * 1000,
+            showConfirm: true,
+            confirmText: "Got it"
+        });
     }
 
     window.sToast = sToast;
     window.sModal = sModal;
+    window.sModalAuto = sModalAuto;
 
     /* ---------- DOM ---------- */
     const loginOverlay = document.getElementById("loginOverlay");
@@ -116,11 +188,15 @@
 
     const navCartCount = document.getElementById("navCartCount");
 
+    /* ✅ State — includes new lookup guards */
     const state = {
         cartCount: Number(window.CART_COUNT || 0),
         apartmentsCache: [],
         lookupTimer: null,
         lastLookedMobile: "",
+        lookupInFlight: false,
+        lookupToken: 0,
+        lastAppliedMobile: "",
         customApartment: false,
         regMode: "apartment",
         regHouseImgData: "",
@@ -247,12 +323,41 @@
     if (document.readyState !== "loading") refreshCartUI();
 
     /* ---------- LOGIN ---------- */
-    function openLogin() {
-        if (loginMobile) loginMobile.value = "";
-        if (loginPassword) loginPassword.value = "";
+    const loginTitle = document.getElementById("loginTitle");
+    const loginSubtitle = document.getElementById("loginSubtitle");
+    const loginMobileField = document.getElementById("loginMobileField");
+    const loginPendingBox = document.getElementById("loginPendingBox");
+    const loginPendingText = document.getElementById("loginPendingText");
+    const loginPendingCloseBtn = document.getElementById("loginPendingCloseBtn");
+    const loginForgotRow = document.getElementById("loginForgotRow");
+    const loginForgotBtn = document.getElementById("loginForgotBtn");
+
+    const forgotOverlay = document.getElementById("forgotOverlay");
+    const forgotForm = document.getElementById("forgotForm");
+    const forgotMobile = document.getElementById("forgotMobile");
+    const forgotBtn = document.getElementById("forgotBtn");
+    const forgotBtnText = document.getElementById("forgotBtnText");
+    const forgotClose = document.getElementById("forgotClose");
+
+    function resetLoginUI() {
+        if (loginTitle) loginTitle.textContent = "Enter your mobile";
+        if (loginSubtitle) loginSubtitle.textContent = "We'll check if you're already with us";
+        if (loginMobileField) loginMobileField.style.display = "";
+        if (loginPendingBox) loginPendingBox.style.display = "none";
+        if (loginForgotRow) loginForgotRow.style.display = "none";
         if (loginPasswordField) loginPasswordField.style.display = "none";
+        if (loginPassword) loginPassword.value = "";
+        if (loginBtn) loginBtn.style.display = "";
         if (loginBtnText) loginBtnText.textContent = "Continue";
+        if (loginBtn) loginBtn.disabled = false;
         state.lastLookedMobile = "";
+        state.lastAppliedMobile = "";
+        state.lookupInFlight = false;
+    }
+
+    function openLogin() {
+        resetLoginUI();
+        if (loginMobile) loginMobile.value = "";
         openOverlay(loginOverlay);
         setTimeout(() => loginMobile && loginMobile.focus(), 200);
     }
@@ -261,44 +366,163 @@
     if (loginOverlay) loginOverlay.addEventListener("click", e => { if (e.target === loginOverlay) closeLogin(); });
     if (navLoginBtn) navLoginBtn.addEventListener("click", openLogin);
 
+    /* ✅ CHANGED: input + blur with duplicate / stale guards */
     if (loginMobile) {
         loginMobile.addEventListener("input", function () {
             this.value = this.value.replace(/[^0-9]/g, "").slice(0, 15);
+
             clearTimeout(state.lookupTimer);
+
             const m = this.value.trim();
+
+            // Collapse any previously-shown password / pending state
             if (loginPasswordField) loginPasswordField.style.display = "none";
             if (loginPassword) loginPassword.value = "";
+            if (loginForgotRow) loginForgotRow.style.display = "none";
+            if (loginBtn) loginBtn.style.display = "";
             if (loginBtnText) loginBtnText.textContent = "Continue";
-            if (m.length < 10) return;
+            if (loginBtn) loginBtn.disabled = false;
+
+            state.lastAppliedMobile = "";
+
+            if (m.length < 10) {
+                state.lastLookedMobile = "";
+                return;
+            }
             if (m === state.lastLookedMobile) return;
-            state.lookupTimer = setTimeout(() => { autoLookupMobile(m); }, 350);
+
+            state.lookupTimer = setTimeout(() => {
+                autoLookupMobile(m, { silent: false });
+            }, 400);
         });
+
         loginMobile.addEventListener("blur", function () {
             const m = this.value.trim();
-            if (m.length >= 10) { clearTimeout(state.lookupTimer); autoLookupMobile(m); }
+            if (!/^[0-9]{10,15}$/.test(m)) return;
+            clearTimeout(state.lookupTimer);
+
+            // Skip if lookup already fired / applied for this exact number
+            if (m === state.lastLookedMobile && (state.lookupInFlight || m === state.lastAppliedMobile)) {
+                return;
+            }
+            autoLookupMobile(m, { silent: false });
         });
     }
 
-    function autoLookupMobile(mobile) {
+    /* ✅ CHANGED: token-guarded lookup (no stale / duplicate responses) */
+    function autoLookupMobile(mobile, opts) {
+        opts = opts || {};
+        mobile = (mobile || "").trim();
+        if (!/^[0-9]{10,15}$/.test(mobile)) return;
+
+        if (mobile === state.lastAppliedMobile && !opts.force) return;
+        if (state.lookupInFlight && mobile === state.lastLookedMobile) return;
+
         state.lastLookedMobile = mobile;
-        fetch(MAIN_URL + "ajax/customer-lookup.php?mobile=" + encodeURIComponent(mobile), { credentials: "same-origin" })
+        const myToken = ++state.lookupToken;
+        state.lookupInFlight = true;
+
+        if (loginBtn) loginBtn.disabled = true;
+        if (loginBtnText && !opts.silent) loginBtnText.textContent = "Checking…";
+
+        fetch(MAIN_URL + "ajax/customer-lookup.php?mobile=" + encodeURIComponent(mobile), {
+            credentials: "same-origin",
+            cache: "no-store"
+        })
             .then(r => r.json().catch(() => null))
             .then(res => {
-                if (!res || !res.success || !res.data) return;
-                if (res.data.exists) {
-                    if (res.data.has_password) {
-                        loginPasswordField.style.display = "";
-                        loginBtnText.textContent = "Login";
-                        setTimeout(() => loginPassword && loginPassword.focus(), 100);
-                    } else {
-                        closeLogin();
-                        openRegister(mobile, res.data);
-                    }
+                if (myToken !== state.lookupToken) return;              // stale
+                const currentMobile = loginMobile ? (loginMobile.value || "").trim() : "";
+                if (currentMobile !== mobile) return;                   // user edited
+
+                state.lookupInFlight = false;
+                if (loginBtn) loginBtn.disabled = false;
+
+                if (!res || !res.success || !res.data) {
+                    if (loginBtnText) loginBtnText.textContent = "Continue";
+                    return;
                 }
+
+                state.lastAppliedMobile = mobile;
+                applyLookupResult(mobile, res.data, { silent: !!opts.silent });
             })
-            .catch(() => { });
+            .catch(() => {
+                if (myToken !== state.lookupToken) return;
+                state.lookupInFlight = false;
+                if (loginBtn) loginBtn.disabled = false;
+                if (loginBtnText) loginBtnText.textContent = "Continue";
+            });
     }
 
+    /* ✅ CHANGED: apply result immediately, focus via requestAnimationFrame */
+    function applyLookupResult(mobile, data, opts) {
+        opts = opts || {};
+        if (!data) return;
+
+        // Case A: approved customer with password → show password field
+        if (data.exists && data.has_password) {
+            if (loginMobileField) loginMobileField.style.display = "";
+            if (loginPendingBox) loginPendingBox.style.display = "none";
+            if (loginTitle) loginTitle.textContent = "Welcome back";
+            if (loginSubtitle) loginSubtitle.textContent = "Enter your password to continue";
+            if (loginForgotRow) loginForgotRow.style.display = "";
+
+            if (loginPasswordField && loginPasswordField.style.display === "none") {
+                loginPasswordField.style.display = "";
+            }
+
+            if (loginBtn) loginBtn.style.display = "";
+            if (loginBtnText) loginBtnText.textContent = "Login";
+
+            if (loginPassword && !opts.silent) {
+                requestAnimationFrame(() => {
+                    loginPassword.focus();
+                });
+            }
+            return;
+        }
+
+        // Case B: existing customer without password → go to register
+        if (data.exists && !data.has_password) {
+            closeLogin();
+            openRegister(mobile, data);
+            return;
+        }
+
+        // Case C: pending request → show pending box
+        if (!data.exists && data.has_pending_request) {
+            if (loginPasswordField) loginPasswordField.style.display = "none";
+            if (loginForgotRow) loginForgotRow.style.display = "none";
+            if (loginBtn) loginBtn.style.display = "none";
+            if (loginTitle) loginTitle.textContent = "Almost there!";
+            if (loginSubtitle) loginSubtitle.textContent = "Your request is being reviewed";
+            if (loginPendingBox) loginPendingBox.style.display = "block";
+            if (loginPendingText) {
+                const pr = data.pending_request || {};
+                const what = pr.requested_apartment || "your address";
+                loginPendingText.innerHTML =
+                    "You already sent a request for <strong>" + escapeHtml(what) + "</strong>." +
+                    "<br>Admin approval is pending. We'll contact you on <strong>" +
+                    escapeHtml(mobile) + "</strong> soon.";
+            }
+            return;
+        }
+
+        // Case D: brand new number → register
+        closeLogin();
+        openRegister(mobile, null);
+    }
+
+    /* Pending popup close */
+    if (loginPendingCloseBtn) {
+        loginPendingCloseBtn.addEventListener("click", function () {
+            if (loginPendingBox) loginPendingBox.style.display = "none";
+            if (loginBtn) loginBtn.style.display = "";
+            resetLoginUI();
+        });
+    }
+
+    /* Login submit */
     if (loginForm) {
         loginForm.addEventListener("submit", function (e) {
             e.preventDefault();
@@ -306,7 +530,9 @@
             const password = (loginPassword.value || "").trim();
             if (!/^[0-9]{10,15}$/.test(mobile)) { sToast("Mobile must be 10–15 digits.", "error"); return; }
 
-            if (loginPasswordField && loginPasswordField.style.display !== "none") {
+            const passwordVisible = loginPasswordField && loginPasswordField.style.display !== "none";
+
+            if (passwordVisible) {
                 if (!password) { sToast("Please enter your password.", "error"); return; }
                 loginBtn.disabled = true; loginBtnText.innerHTML = '...';
                 const fd = new FormData();
@@ -320,24 +546,61 @@
                         IS_LOGGED_IN = true; closeLogin(); sToast("Welcome back!", "success");
                         setTimeout(() => window.location.reload(), 800);
                     })
-                    .catch(() => { loginBtn.disabled = false; loginBtnText.textContent = "Login"; sToast("Unable to connect.", "error"); });
+                    .catch(() => {
+                        loginBtn.disabled = false; loginBtnText.textContent = "Login";
+                        sToast("Unable to connect.", "error");
+                    });
                 return;
             }
 
-            loginBtn.disabled = true; loginBtnText.innerHTML = '...';
-            fetch(MAIN_URL + "ajax/customer-lookup.php?mobile=" + encodeURIComponent(mobile), { credentials: "same-origin" })
+            // No password field yet → lookup once (force so Continue always re-checks)
+            autoLookupMobile(mobile, { force: true });
+        });
+    }
+
+    /* ---------- FORGOT PASSWORD ---------- */
+    function openForgot() {
+        if (forgotMobile) forgotMobile.value = "";
+        if (forgotBtn) forgotBtn.disabled = false;
+        if (forgotBtnText) forgotBtnText.textContent = "Send Request";
+        closeLogin();
+        openOverlay(forgotOverlay);
+        setTimeout(() => forgotMobile && forgotMobile.focus(), 200);
+    }
+    function closeForgot() { closeOverlay(forgotOverlay); }
+    if (loginForgotBtn) loginForgotBtn.addEventListener("click", openForgot);
+    if (forgotClose) forgotClose.addEventListener("click", closeForgot);
+    if (forgotOverlay) forgotOverlay.addEventListener("click", e => { if (e.target === forgotOverlay) closeForgot(); });
+
+    if (forgotMobile) {
+        forgotMobile.addEventListener("input", function () {
+            this.value = this.value.replace(/[^0-9]/g, "").slice(0, 15);
+        });
+    }
+    if (forgotForm) {
+        forgotForm.addEventListener("submit", function (e) {
+            e.preventDefault();
+            const mobile = (forgotMobile.value || "").trim();
+            if (!/^[0-9]{10,15}$/.test(mobile)) { sToast("Mobile must be 10–15 digits.", "error"); return; }
+
+            forgotBtn.disabled = true; forgotBtnText.innerHTML = 'Sending…';
+            const fd = new FormData();
+            fd.append("mobile_number", mobile);
+            fetch(MAIN_URL + "ajax/forgot-password-request.php", { method: "POST", body: fd, credentials: "same-origin" })
                 .then(r => r.json().catch(() => null))
                 .then(res => {
-                    loginBtn.disabled = false; loginBtnText.textContent = "Continue";
-                    if (!res || !res.success || !res.data) { sToast((res && res.message) || "Lookup failed.", "error"); return; }
-                    if (res.data.exists) {
-                        if (res.data.has_password) {
-                            loginPasswordField.style.display = ""; loginBtnText.textContent = "Login";
-                            setTimeout(() => loginPassword && loginPassword.focus(), 100);
-                        } else { closeLogin(); openRegister(mobile, res.data); }
-                    } else { closeLogin(); openRegister(mobile, null); }
+                    forgotBtn.disabled = false; forgotBtnText.textContent = "Send Request";
+                    if (!res || !res.success) {
+                        sToast((res && res.message) || "Could not send request.", "error");
+                        return;
+                    }
+                    closeForgot();
+                    sModal("Request Sent", res.message || "Our team will contact you shortly.", "success");
                 })
-                .catch(() => { loginBtn.disabled = false; loginBtnText.textContent = "Continue"; sToast("Unable to connect.", "error"); });
+                .catch(() => {
+                    forgotBtn.disabled = false; forgotBtnText.textContent = "Send Request";
+                    sToast("Unable to connect.", "error");
+                });
         });
     }
 
@@ -370,7 +633,7 @@
     }
 
     function requestLocation(opts) {
-        const { input, btn, btnText, hint, actions } = opts;
+        const { btn, btnText, hint } = opts;
         if (!navigator.geolocation) {
             if (hint) hint.textContent = "Browser does not support location.";
             return;
@@ -605,7 +868,11 @@
         if (regBlock) regBlock.value = "";
         if (regFloor) regFloor.value = "";
         if (regDoorNo) regDoorNo.value = "";
-        if (regVariantHint) regVariantHint.textContent = state.currentVariants.length ? "Pick block, floor, door no." : "No variants — you can still create your account with new floor/door.";
+        if (regVariantHint) {
+            regVariantHint.textContent = state.currentVariants.length
+                ? "Pick block, floor, door no — or type a new combination."
+                : "No saved combinations — type block / floor / door no. New values will be sent as a request.";
+        }
         state.selectedCharge = null;
     }
 
@@ -620,13 +887,32 @@
         });
         return out.sort();
     }
+
     function renderVariantDropdown(inputEl, listEl, items, currentValue, onPick) {
         if (!listEl) return;
         const q = (currentValue || "").trim().toLowerCase();
-        const filtered = q ? items.filter(v => v.toLowerCase().includes(q)) : items;
+        const filtered = q
+            ? items.filter(v => v.toLowerCase().includes(q))
+            : items;
 
         if (!filtered.length) {
-            listEl.style.display = "none";
+            if (q) {
+                listEl.innerHTML =
+                    `<div class="mm-co-dd-item mm-co-dd-custom" data-value="${escapeHtml(currentValue)}">
+                    <strong>Use "${escapeHtml(currentValue)}"</strong>
+                    <span>New value — will be sent to admin</span>
+                </div>`;
+                listEl.style.display = "block";
+                listEl.onclick = function (e) {
+                    const item = e.target.closest(".mm-co-dd-item");
+                    if (!item) return;
+                    inputEl.value = item.dataset.value;
+                    closeAllDropdowns();
+                    onPick(item.dataset.value);
+                };
+            } else {
+                listEl.style.display = "none";
+            }
             return;
         }
 
@@ -643,24 +929,36 @@
             onPick(item.dataset.value);
         };
     }
+
     function updateVariantCharge() {
         const block = (regBlock && regBlock.value || "").trim();
         const floor = (regFloor && regFloor.value || "").trim();
         const doorNo = (regDoorNo && regDoorNo.value || "").trim();
         state.selectedCharge = null;
-        if (!block || !floor || !doorNo) return;
+
+        if (!block || !floor || !doorNo) {
+            if (regVariantHint) regVariantHint.textContent = "Fill block, floor and door no.";
+            return;
+        }
+
         const match = state.currentVariants.find(v =>
             v.block.toLowerCase() === block.toLowerCase() &&
             v.floor.toLowerCase() === floor.toLowerCase() &&
             v.door_no.toLowerCase() === doorNo.toLowerCase()
         );
+
         if (match) {
             state.selectedCharge = match.charge;
             if (regVariantHint) regVariantHint.textContent = "Delivery charge: ₹" + Math.round(match.charge);
         } else {
-            if (regVariantHint) regVariantHint.textContent = "New combination — it will be added to this apartment automatically.";
+            if (regVariantHint) {
+                regVariantHint.textContent =
+                    "New combination (“Blk " + block + " / Door " + doorNo + " / Fl " + floor +
+                    "”) — will be sent as a request.";
+            }
         }
     }
+
     if (regBlock) {
         regBlock.addEventListener("focus", function () {
             if (state.customApartment) return;
@@ -673,7 +971,16 @@
                 setTimeout(() => regFloor && regFloor.focus(), 100);
             });
         });
+        regBlock.addEventListener("blur", function () {
+            if (regBlock.value.trim() !== "" && !state.currentVariants.some(v => v.block.toLowerCase() === regBlock.value.trim().toLowerCase())) {
+                setTimeout(closeAllDropdowns, 4500);
+            } else {
+                setTimeout(closeAllDropdowns, 150);
+            }
+            updateVariantCharge();
+        });
     }
+
     if (regFloor) {
         regFloor.addEventListener("focus", function () {
             if (state.customApartment) return;
@@ -688,7 +995,21 @@
                 setTimeout(() => regDoorNo && regDoorNo.focus(), 100);
             });
         });
+        regFloor.addEventListener("blur", function () {
+            const block = (regBlock && regBlock.value || "").trim().toLowerCase();
+            let source = state.currentVariants;
+            if (block) source = source.filter(v => v.block.toLowerCase() === block);
+            const floors = uniqueValues(source, "floor");
+
+            if (regFloor.value.trim() !== "" && !floors.some(f => f.toLowerCase() === regFloor.value.trim().toLowerCase())) {
+                setTimeout(closeAllDropdowns, 4500);
+            } else {
+                setTimeout(closeAllDropdowns, 150);
+            }
+            updateVariantCharge();
+        });
     }
+
     if (regDoorNo) {
         regDoorNo.addEventListener("focus", function () {
             if (state.customApartment) return;
@@ -701,7 +1022,23 @@
             renderVariantDropdown(regDoorNo, regDoorNoList, doorNos, regDoorNo.value, function (val) {
                 regDoorNo.value = val;
                 updateVariantCharge();
+                setTimeout(closeAllDropdowns, 150);
             });
+        });
+        regDoorNo.addEventListener("blur", function () {
+            const block = (regBlock && regBlock.value || "").trim().toLowerCase();
+            const floor = (regFloor && regFloor.value || "").trim().toLowerCase();
+            let source = state.currentVariants;
+            if (block) source = source.filter(v => v.block.toLowerCase() === block);
+            if (floor) source = source.filter(v => v.floor.toLowerCase() === floor);
+            const doorNos = uniqueValues(source, "door_no");
+
+            if (regDoorNo.value.trim() !== "" && !doorNos.some(d => d.toLowerCase() === regDoorNo.value.trim().toLowerCase())) {
+                setTimeout(closeAllDropdowns, 4500);
+            } else {
+                setTimeout(closeAllDropdowns, 150);
+            }
+            updateVariantCharge();
         });
     }
 
@@ -709,13 +1046,16 @@
         regAptSearch.addEventListener("focus", function () {
             renderRegAptList(regAptSearch.value);
         });
+
         regAptSearch.addEventListener("input", function () {
             const typed = this.value.trim();
             if (regAptId) regAptId.value = "";
             if (regAptCode) regAptCode.value = "";
+
             const exact = state.apartmentsCache.find(a =>
                 (a.apartment_name || "").toLowerCase() === typed.toLowerCase()
             );
+
             if (exact) {
                 if (regAptId) regAptId.value = exact.id;
                 if (regAptCode) regAptCode.value = exact.apartment_code;
@@ -724,20 +1064,33 @@
                 if (regAptHint) regAptHint.textContent = "";
             } else if (typed.length > 0) {
                 state.customApartment = true;
-                if (regAptHint) regAptHint.textContent = "New apartment — will be sent as a request to admin.";
+                state.currentVariants = [];
+                if (regAptHint) {
+                    regAptHint.textContent =
+                        "“" + typed + "” is a new apartment — it will be sent as a request.";
+                }
             } else {
                 state.customApartment = false;
                 if (regAptHint) regAptHint.textContent = "";
             }
+
             renderRegAptList(this.value);
         });
+
         regAptSearch.addEventListener("blur", function () {
-            setTimeout(() => {
-                if (regAptList) regAptList.style.display = "none";
-            }, 200);
+            if (regAptSearch.value.trim() !== "" && state.customApartment) {
+                setTimeout(() => {
+                    if (regAptList) regAptList.style.display = "none";
+                }, 4500);
+            } else {
+                setTimeout(() => {
+                    if (regAptList) regAptList.style.display = "none";
+                }, 150);
+            }
         });
     }
 
+    /* ---------- REGISTER SUBMIT ---------- */
     if (regForm) {
         regForm.addEventListener("submit", function (e) {
             e.preventDefault();
@@ -820,11 +1173,21 @@
                         sModal("Registration Failed", (res && res.message) || "Please try again.", "error");
                         return;
                     }
+
+                    // Request-only → 10-second auto-close SweetAlert
                     if (res.data && res.data.request_only) {
-                        const extra = res.data.already_requested ? "<br><br>You already sent a request earlier." : "";
-                        sModal("Request Submitted", (res.message || "Our team will contact you soon.") + extra, "success");
+                        const extra = res.data.already_requested
+                            ? "<br><br>You already sent a request earlier — we'll keep that one."
+                            : "";
+                        sModalAuto(
+                            "Request Submitted",
+                            (res.message || "Our team will review and contact you soon.") + extra,
+                            "success",
+                            10
+                        );
                         return;
                     }
+
                     IS_LOGGED_IN = true;
                     if (res.data && res.data.new_division_added) {
                         sToast("Account created!", "success");
