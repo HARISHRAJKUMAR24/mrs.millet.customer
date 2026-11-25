@@ -1,6 +1,6 @@
 /* =========================================================
    MRS MILL@ — CUSTOMER STORE
-   File: ./js/home.js   (v2026-11-16e — login lookup fix + 10s request alert)
+   File: ./js/home.js   (v2026-11-25b — popup fix + map edit unlock)
    ========================================================= */
 
 (function () {
@@ -35,7 +35,6 @@
 
     /* ---------------------------------------------------------
        sModal — supports { timer, showConfirm, confirmText }
-       No alert() fallback.
        --------------------------------------------------------- */
     function sModal(title, html, icon, options) {
         options = options || {};
@@ -63,7 +62,6 @@
             return Swal_.fire(cfg);
         }
 
-        // No-Swal fallback modal (never alert())
         return new Promise(function (resolve) {
             const existing = document.getElementById("mmFallbackModal");
             if (existing) existing.remove();
@@ -105,7 +103,6 @@
         });
     }
 
-    /* Auto-close helper (default 10s) */
     function sModalAuto(title, html, icon, seconds) {
         return sModal(title, html, icon || "success", {
             timer: (Number(seconds) || 10) * 1000,
@@ -188,7 +185,7 @@
 
     const navCartCount = document.getElementById("navCartCount");
 
-    /* ✅ State — includes new lookup guards */
+    /* ✅ State */
     const state = {
         cartCount: Number(window.CART_COUNT || 0),
         apartmentsCache: [],
@@ -200,17 +197,119 @@
         customApartment: false,
         regMode: "apartment",
         regHouseImgData: "",
+        regHouseImgBlocked: false,
         regHouseMapLink: "",
         regAptMapLink: "",
         regAptImgData: "",
+        regAptImgBlocked: false,
         currentVariants: [],
         selectedCharge: null
     };
+
+    /* =========================================================
+       IMAGE SIZE LIMIT — enforced at upload time
+       ========================================================= */
+    const IMG_MAX_BYTES = 3 * 1024 * 1024; // 3 MB
+    const IMG_MAX_LABEL = "3 MB";
 
     function escapeHtml(s) {
         return String(s == null ? "" : s)
             .replace(/&/g, "&amp;").replace(/</g, "&lt;")
             .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function readImageWithLimit(file) {
+        return new Promise(function (resolve) {
+            if (!file) return resolve({ ok: false, reason: "No file selected." });
+            if (!/^image\//.test(file.type)) {
+                return resolve({ ok: false, reason: "Please choose an image file (JPG, PNG, WEBP, GIF)." });
+            }
+            if (file.size > IMG_MAX_BYTES) {
+                const mb = (file.size / (1024 * 1024)).toFixed(2);
+                return resolve({
+                    ok: false,
+                    reason: "Image is " + mb + " MB — max allowed is " + IMG_MAX_LABEL + "."
+                });
+            }
+            const reader = new FileReader();
+            reader.onload = function (evt) { resolve({ ok: true, dataUrl: evt.target.result }); };
+            reader.onerror = function () { resolve({ ok: false, reason: "Could not read the image file." }); };
+            reader.readAsDataURL(file);
+        });
+    }
+
+    function refreshRegisterButtonState() {
+        if (!regBtn) return;
+        const blocked = !!(state.regAptImgBlocked || state.regHouseImgBlocked);
+        regBtn.disabled = blocked;
+        if (blocked) {
+            regBtn.style.opacity = "0.55";
+            regBtn.style.cursor = "not-allowed";
+        } else {
+            regBtn.style.opacity = "";
+            regBtn.style.cursor = "";
+        }
+    }
+
+    function showImageTooLargePopup(which) {
+        const sizeText = which === "apt" ? "apartment/building" : "house";
+        sModal(
+            "Image Too Large",
+            "<p style='margin:0 0 6px;'>Your <strong>" + sizeText + "</strong> image is bigger than the allowed limit.</p>" +
+            "<p style='margin:0;font-weight:700;color:#b51f2c;'>Maximum size: " + IMG_MAX_LABEL + "</p>" +
+            "<p style='margin:8px 0 0;font-size:12px;color:#6f675f;'>Please upload a smaller image (JPG, PNG, WEBP or GIF).</p>",
+            "warning"
+        );
+    }
+
+    function markImageBlocked(which, reason) {
+        if (which === "apt") {
+            state.regAptImgData = "";
+            state.regAptImgBlocked = true;
+            if (regAptImgPrev) {
+                regAptImgPrev.classList.add("img-drop-empty");
+                regAptImgPrev.innerHTML =
+                    '<svg viewBox="0 0 24 24" fill="none" stroke="#b51f2c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;">' +
+                    '<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>' +
+                    '<span style="color:#b51f2c;font-weight:700;">' + escapeHtml(reason) + '</span>' +
+                    '<span style="font-size:11px;">Tap to try a smaller image</span>';
+            }
+            try { regAptImg.value = ""; } catch (e) { }
+        } else {
+            state.regHouseImgData = "";
+            state.regHouseImgBlocked = true;
+            if (regHouseImgPrev) {
+                regHouseImgPrev.classList.add("img-drop-empty");
+                regHouseImgPrev.innerHTML =
+                    '<svg viewBox="0 0 24 24" fill="none" stroke="#b51f2c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:26px;height:26px;">' +
+                    '<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>' +
+                    '<span style="color:#b51f2c;font-weight:700;">' + escapeHtml(reason) + '</span>' +
+                    '<span style="font-size:11px;">Tap to try a smaller image</span>';
+            }
+            try { regHouseImg.value = ""; } catch (e) { }
+        }
+        refreshRegisterButtonState();
+        showImageTooLargePopup(which);
+    }
+
+    function applyImagePreview(which, dataUrl, fileSize) {
+        if (which === "apt") {
+            state.regAptImgData = dataUrl;
+            state.regAptImgBlocked = false;
+            if (regAptImgPrev) {
+                regAptImgPrev.classList.remove("img-drop-empty");
+                regAptImgPrev.innerHTML = '<img src="' + dataUrl + '" alt="Preview">';
+            }
+        } else {
+            state.regHouseImgData = dataUrl;
+            state.regHouseImgBlocked = false;
+            if (regHouseImgPrev) {
+                regHouseImgPrev.classList.remove("img-drop-empty");
+                regHouseImgPrev.innerHTML = '<img src="' + dataUrl + '" alt="Preview">';
+            }
+        }
+        refreshRegisterButtonState();
+        sToast("Image attached (" + (fileSize / 1024).toFixed(0) + " KB).", "success");
     }
 
     function openOverlay(el) {
@@ -366,7 +465,6 @@
     if (loginOverlay) loginOverlay.addEventListener("click", e => { if (e.target === loginOverlay) closeLogin(); });
     if (navLoginBtn) navLoginBtn.addEventListener("click", openLogin);
 
-    /* ✅ CHANGED: input + blur with duplicate / stale guards */
     if (loginMobile) {
         loginMobile.addEventListener("input", function () {
             this.value = this.value.replace(/[^0-9]/g, "").slice(0, 15);
@@ -375,7 +473,6 @@
 
             const m = this.value.trim();
 
-            // Collapse any previously-shown password / pending state
             if (loginPasswordField) loginPasswordField.style.display = "none";
             if (loginPassword) loginPassword.value = "";
             if (loginForgotRow) loginForgotRow.style.display = "none";
@@ -401,7 +498,6 @@
             if (!/^[0-9]{10,15}$/.test(m)) return;
             clearTimeout(state.lookupTimer);
 
-            // Skip if lookup already fired / applied for this exact number
             if (m === state.lastLookedMobile && (state.lookupInFlight || m === state.lastAppliedMobile)) {
                 return;
             }
@@ -409,7 +505,6 @@
         });
     }
 
-    /* ✅ CHANGED: token-guarded lookup (no stale / duplicate responses) */
     function autoLookupMobile(mobile, opts) {
         opts = opts || {};
         mobile = (mobile || "").trim();
@@ -431,9 +526,9 @@
         })
             .then(r => r.json().catch(() => null))
             .then(res => {
-                if (myToken !== state.lookupToken) return;              // stale
+                if (myToken !== state.lookupToken) return;
                 const currentMobile = loginMobile ? (loginMobile.value || "").trim() : "";
-                if (currentMobile !== mobile) return;                   // user edited
+                if (currentMobile !== mobile) return;
 
                 state.lookupInFlight = false;
                 if (loginBtn) loginBtn.disabled = false;
@@ -454,12 +549,10 @@
             });
     }
 
-    /* ✅ CHANGED: apply result immediately, focus via requestAnimationFrame */
     function applyLookupResult(mobile, data, opts) {
         opts = opts || {};
         if (!data) return;
 
-        // Case A: approved customer with password → show password field
         if (data.exists && data.has_password) {
             if (loginMobileField) loginMobileField.style.display = "";
             if (loginPendingBox) loginPendingBox.style.display = "none";
@@ -475,21 +568,17 @@
             if (loginBtnText) loginBtnText.textContent = "Login";
 
             if (loginPassword && !opts.silent) {
-                requestAnimationFrame(() => {
-                    loginPassword.focus();
-                });
+                requestAnimationFrame(() => { loginPassword.focus(); });
             }
             return;
         }
 
-        // Case B: existing customer without password → go to register
         if (data.exists && !data.has_password) {
             closeLogin();
             openRegister(mobile, data);
             return;
         }
 
-        // Case C: pending request → show pending box
         if (!data.exists && data.has_pending_request) {
             if (loginPasswordField) loginPasswordField.style.display = "none";
             if (loginForgotRow) loginForgotRow.style.display = "none";
@@ -508,12 +597,10 @@
             return;
         }
 
-        // Case D: brand new number → register
         closeLogin();
         openRegister(mobile, null);
     }
 
-    /* Pending popup close */
     if (loginPendingCloseBtn) {
         loginPendingCloseBtn.addEventListener("click", function () {
             if (loginPendingBox) loginPendingBox.style.display = "none";
@@ -522,7 +609,6 @@
         });
     }
 
-    /* Login submit */
     if (loginForm) {
         loginForm.addEventListener("submit", function (e) {
             e.preventDefault();
@@ -553,7 +639,6 @@
                 return;
             }
 
-            // No password field yet → lookup once (force so Continue always re-checks)
             autoLookupMobile(mobile, { force: true });
         });
     }
@@ -618,13 +703,19 @@
     function setLocState(opts) {
         const { input, btn, btnText, hint, actions } = opts;
         if (opts.hasLink) {
-            if (input) input.value = opts.link || "";
+            if (input) {
+                input.value = opts.link || "";
+                input.readOnly = true;
+            }
             if (btn) { btn.disabled = true; btn.classList.add("success"); }
             if (btnText) btnText.textContent = "Location Pinned ✓";
             if (hint) hint.textContent = "Location saved. Use Edit / Undo below.";
             if (actions) actions.style.display = "flex";
         } else {
-            if (input) input.value = "";
+            if (input) {
+                input.value = "";
+                input.readOnly = false;
+            }
             if (btn) { btn.disabled = false; btn.classList.remove("success"); }
             if (btnText) btnText.textContent = "Get My Current Location";
             if (hint) hint.textContent = "";
@@ -664,9 +755,14 @@
             });
         });
     }
+
+    /* ✅ Edit = unlock the map field so the user can edit/paste the link manually */
     if (regAptLocEdit) {
         regAptLocEdit.addEventListener("click", function () {
-            if (state.regAptMapLink) { window.open(state.regAptMapLink, "_blank"); }
+            if (!regAptMap) return;
+            regAptMap.readOnly = false;
+            regAptMap.focus();
+            if (regAptLocHint) regAptLocHint.textContent = "Editing — you can paste or type a Google Maps link now.";
         });
     }
     if (regAptLocUndo) {
@@ -676,6 +772,15 @@
                 input: regAptMap, btn: regAptLocBtn, btnText: regAptLocText,
                 hint: regAptLocHint, actions: regAptLocActions, hasLink: false
             });
+        });
+    }
+    /* Keep state in sync if the user types/pastes into the map field manually */
+    if (regAptMap) {
+        regAptMap.addEventListener("input", function () {
+            const v = this.value.trim();
+            state.regAptMapLink = v;
+            if (regAptLocActions) regAptLocActions.style.display = v ? "flex" : "none";
+            if (regAptLocHint) regAptLocHint.textContent = v ? "Link captured — you can edit or undo." : "";
         });
     }
 
@@ -688,9 +793,14 @@
             });
         });
     }
+
+    /* ✅ Edit = unlock the house map field */
     if (regHouseLocEdit) {
         regHouseLocEdit.addEventListener("click", function () {
-            if (state.regHouseMapLink) { window.open(state.regHouseMapLink, "_blank"); }
+            if (!regHouseMap) return;
+            regHouseMap.readOnly = false;
+            regHouseMap.focus();
+            if (regHouseLocHint) regHouseLocHint.textContent = "Editing — you can paste or type a Google Maps link now.";
         });
     }
     if (regHouseLocUndo) {
@@ -702,23 +812,25 @@
             });
         });
     }
+    if (regHouseMap) {
+        regHouseMap.addEventListener("input", function () {
+            const v = this.value.trim();
+            state.regHouseMapLink = v;
+            if (regHouseLocActions) regHouseLocActions.style.display = v ? "flex" : "none";
+            if (regHouseLocHint) regHouseLocHint.textContent = v ? "Link captured — you can edit or undo." : "";
+        });
+    }
 
+    /* ---------- IMAGE UPLOAD (size-guarded) ---------- */
     if (regAptImgDrop) regAptImgDrop.addEventListener("click", () => { if (regAptImg) regAptImg.click(); });
     if (regAptImg) {
         regAptImg.addEventListener("change", function () {
             const file = this.files && this.files[0];
             if (!file) return;
-            if (!/^image\//.test(file.type)) { sToast("Please choose an image file.", "error"); return; }
-            if (file.size > 3 * 1024 * 1024) { sToast("Image must be under 3 MB.", "error"); return; }
-            const reader = new FileReader();
-            reader.onload = function (evt) {
-                state.regAptImgData = evt.target.result;
-                if (regAptImgPrev) {
-                    regAptImgPrev.classList.remove("img-drop-empty");
-                    regAptImgPrev.innerHTML = '<img src="' + state.regAptImgData + '" alt="Preview">';
-                }
-            };
-            reader.readAsDataURL(file);
+            readImageWithLimit(file).then(function (result) {
+                if (!result.ok) { markImageBlocked("apt", result.reason); return; }
+                applyImagePreview("apt", result.dataUrl, file.size);
+            });
         });
     }
 
@@ -727,17 +839,10 @@
         regHouseImg.addEventListener("change", function () {
             const file = this.files && this.files[0];
             if (!file) return;
-            if (!/^image\//.test(file.type)) { sToast("Please choose an image file.", "error"); return; }
-            if (file.size > 3 * 1024 * 1024) { sToast("Image must be under 3 MB.", "error"); return; }
-            const reader = new FileReader();
-            reader.onload = function (evt) {
-                state.regHouseImgData = evt.target.result;
-                if (regHouseImgPrev) {
-                    regHouseImgPrev.classList.remove("img-drop-empty");
-                    regHouseImgPrev.innerHTML = '<img src="' + state.regHouseImgData + '" alt="Preview">';
-                }
-            };
-            reader.readAsDataURL(file);
+            readImageWithLimit(file).then(function (result) {
+                if (!result.ok) { markImageBlocked("house", result.reason); return; }
+                applyImagePreview("house", result.dataUrl, file.size);
+            });
         });
     }
 
@@ -778,6 +883,7 @@
             regAptImgPrev.innerHTML = '<span>Tap to upload a photo</span>';
         }
         state.regAptImgData = "";
+        state.regAptImgBlocked = false;
 
         if (regHouseAddress) regHouseAddress.value = "";
         state.regHouseMapLink = "";
@@ -791,6 +897,9 @@
             regHouseImgPrev.innerHTML = '<span>Tap to upload a photo</span>';
         }
         state.regHouseImgData = "";
+        state.regHouseImgBlocked = false;
+
+        refreshRegisterButtonState();
 
         setRegMode("apartment");
         loadRegisterApartments(function () { });
@@ -1095,6 +1204,11 @@
         regForm.addEventListener("submit", function (e) {
             e.preventDefault();
 
+            if (state.regAptImgBlocked || state.regHouseImgBlocked) {
+                showImageTooLargePopup(state.regAptImgBlocked ? "apt" : "house");
+                return;
+            }
+
             const mobile = regMobile ? (regMobile.value || "").trim() : "";
             const name = regName ? (regName.value || "").trim() : "";
             const password = regPassword ? (regPassword.value || "").trim() : "";
@@ -1168,13 +1282,14 @@
                 .then(res => {
                     if (regBtn) regBtn.disabled = false;
                     if (regBtnText) regBtnText.textContent = "Create Account";
+                    refreshRegisterButtonState();
 
                     if (!res || !res.success) {
                         sModal("Registration Failed", (res && res.message) || "Please try again.", "error");
                         return;
                     }
 
-                    // Request-only → 10-second auto-close SweetAlert
+                    // Request-only → 10-second auto-close popup
                     if (res.data && res.data.request_only) {
                         const extra = res.data.already_requested
                             ? "<br><br>You already sent a request earlier — we'll keep that one."
@@ -1188,17 +1303,28 @@
                         return;
                     }
 
+                    // 🎉 Success → big welcome popup (10s auto-close OR click "Start Shopping")
                     IS_LOGGED_IN = true;
-                    if (res.data && res.data.new_division_added) {
-                        sToast("Account created!", "success");
-                    } else {
-                        sToast("Account created! Welcome!", "success");
-                    }
-                    setTimeout(() => window.location.reload(), 1000);
+
+                    sModal(
+                        "Welcome to MRS MILL@!",
+                        "<p style='margin:0 0 10px;font-size:14px;'>" +
+                        "Hi <strong>" + escapeHtml(name) + "</strong>, your account is ready." +
+                        "</p>" +
+                        (res.data && res.data.new_division_added
+                            ? "<p style='margin:0;color:#2e7d32;font-weight:700;'>A new address combination was added to your apartment.</p>"
+                            : "<p style='margin:0;color:#6f675f;'>We're loading your store now…</p>"),
+                        "success",
+                        { showConfirm: true, confirmText: "Start Shopping", timer: 10000 }
+                    );
+
+                    // ⚠️ ONLY ONE reload timer here
+                    setTimeout(function () { window.location.reload(); }, 10000);
                 })
                 .catch(() => {
                     if (regBtn) regBtn.disabled = false;
                     if (regBtnText) regBtnText.textContent = "Create Account";
+                    refreshRegisterButtonState();
                     sModal("Network Error", "Unable to connect. Please try again.", "error");
                 });
         });

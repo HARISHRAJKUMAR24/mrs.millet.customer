@@ -260,9 +260,10 @@
                                 <path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 1 1 18 0z" />
                                 <circle cx="12" cy="10" r="3" />
                             </svg>
+                            <!-- ✅ CHANGED: removed `readonly` so Edit works and users can type/paste immediately -->
                             <input type="text" class="cust-input" id="regHouseMap"
-                                placeholder="Tap the button below to pin your location"
-                                maxlength="500" readonly>
+                                placeholder="Tap the button below or paste Google Maps link"
+                                maxlength="500">
                         </div>
                         <button type="button" class="loc-btn" id="regHouseLocBtn">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;">
@@ -486,7 +487,6 @@
         border: 1.5px solid #ece5da;
         border-radius: 12px;
         box-shadow: 0 15px 35px rgba(0, 0, 0, .12);
-        z-index: 30;
         z-index: 9999;
         pointer-events: auto;
     }
@@ -647,19 +647,18 @@
         margin-bottom: 10px;
     }
 
-    /* in the popup <style> block already added above */
+    /* ✅ CHANGED: background only — removed forced cursor so Edit unlock is visible */
     #regAptMap,
     #regHouseMap {
         background: #fffdf9 !important;
-        cursor: text !important;
     }
+
     /* The custom yellow warning item */
     .mm-co-dd-item.mm-co-dd-custom {
         background: #fff8e1;
         border-left: 4px solid #d4a017;
         padding: 12px 14px;
         cursor: pointer;
-        /* Changed from default to pointer so users can click it */
     }
 
     .mm-co-dd-item.mm-co-dd-custom strong {

@@ -1,7 +1,11 @@
 /* =========================================================
    MRS MILL@ — CHECKOUT
-   File: ./js/checkout.js   v2026-11-03j
-   Fix: individual house delivery charge now correctly applied.
+   File: ./js/checkout.js   v2026-11-25a
+   Fixes:
+   - null-safe updateTotals (no more "textContent of null")
+   - Subtotal row shows raw subtotal, discount shown separately
+   - window.setCheckoutSubtotal() so coupon apply/remove keeps
+     totals + Razorpay amount in sync
    ========================================================= */
 
 (function () {
@@ -62,6 +66,8 @@
     let branchesCache = [];
     let apartmentsLoaded = false;
     let selectedDivision = null;
+
+    /* subtotal = food amount AFTER discounts (used for tax + payment) */
     let subtotal = Number(window.CART_SUBTOTAL || 0);
     let deliveryCharge = 0;
     let currentMode = "delivery";
@@ -172,13 +178,11 @@
 
     modeRadios.forEach(r => r.addEventListener("change", function () { setMode(this.value); }));
 
-    /* =========================================================
-       ✅ RESTORE ADDRESS — FIXED for individual house
-       ========================================================= */
+    /* ---------- RESTORE ADDRESS ---------- */
     function restoreCustomerAddress() {
         const savedChg = Number(window.CUSTOMER_DIVISION_CHARGE || 0);
 
-        /* Individual house — use saved delivery_charge directly */
+        /* Individual house — use saved delivery charge directly */
         if (ADDRESS_TYPE === "individual_house") {
             deliveryCharge = Math.round(savedChg);
             updateTotals();
@@ -328,9 +332,9 @@
                 }
                 divisionsCache = res.data;
                 divisionField.style.display = "block";
-                divisionSearch.value = "";
-                divisionInput.value = "";
-                divisionHint.textContent = "";
+                if (divisionSearch) divisionSearch.value = "";
+                if (divisionInput) divisionInput.value = "";
+                if (divisionHint) divisionHint.textContent = "";
                 selectedDivision = null;
                 deliveryCharge = 0;
                 updateTotals();
@@ -386,13 +390,15 @@
         updateTotals();
     }
 
-    /* ---------- TOTALS ---------- */
+    /* ---------- TOTALS (null-safe) ---------- */
     function updateTotals() {
-        subTotalEl.textContent = money(subtotal);
+        /* Subtotal row shows the raw (pre-discount) amount; discount has its own row */
+        const rawSubtotal = Number(window.CART_RAW_SUBTOTAL || subtotal);
+        if (subTotalEl) subTotalEl.textContent = money(rawSubtotal);
 
         const mode = getCheckedMode();
         const delivery = (mode === "pickup") ? 0 : Math.round(Number(deliveryCharge || 0));
-        deliveryEl.textContent = money(delivery);
+        if (deliveryEl) deliveryEl.textContent = money(delivery);
 
         const tax = calcTax(subtotal);
         if (taxRow && taxAmountEl && taxLabelEl) {
@@ -418,7 +424,7 @@
         if (walletRow) {
             if (walletUsable > 0) {
                 walletRow.style.display = "flex";
-                if (walletAppliedEl) walletAppliedEl.textContent = walletUsable;
+                if (walletAppliedEl) walletAppliedEl.textContent = Math.round(walletUsable);
             } else {
                 walletRow.style.display = "none";
             }
@@ -436,9 +442,18 @@
             }
         }
 
-        grandTotalEl.textContent = money(payable);
-        if (payNowText) payNowText.textContent = payable > 0 ? "Pay Now" : "Place Order";
+        if (grandTotalEl) grandTotalEl.textContent = money(payable);
+        if (payNowText && !(payNowBtn && payNowBtn.disabled && window.MIXED_MENUS_LOCKED || window.OOS_LOCKED)) {
+            payNowText.textContent = payable > 0 ? "Pay Now" : "Place Order";
+        }
     }
+
+    /* Called by the coupon script after apply/remove so everything stays in sync */
+    window.setCheckoutSubtotal = function (newSubtotal) {
+        subtotal = Math.max(0, Math.round(Number(newSubtotal) || 0));
+        updateTotals();
+    };
+
     updateTotals();
     (function autoFillAddress() {
         if (Number(window.CUSTOMER_APARTMENT_ID || 0) > 0 || ADDRESS_TYPE === "individual_house") {
@@ -446,101 +461,19 @@
         }
     })();
 
-    /* =========================================================
-       INLINE OFFER RADIO — Apply selection
-       ========================================================= */
-    (function () {
-        const offersList     = document.getElementById('offersList');
-        const applyBtn       = document.getElementById('offerApplyBtn');
-        const offerMsg       = document.getElementById('offerMsg');
-        const manualInput    = document.getElementById('offerManualInput');
-        const manualApplyBtn = document.getElementById('offerManualApply');
-
-        if (!offersList || !applyBtn) return;
-
-        function showMsg(msg, type) {
-            if (!offerMsg) return;
-            offerMsg.textContent = msg;
-            offerMsg.className = 'mm-offer-msg ' + (type || '');
-        }
-
-        offersList.querySelectorAll('.mm-offer-row').forEach(row => {
-            row.addEventListener('click', () => {
-                offersList.querySelectorAll('.mm-offer-row').forEach(r => r.classList.remove('selected'));
-                row.classList.add('selected');
-                const radio = row.querySelector('input[type="radio"]');
-                if (radio) radio.checked = true;
-            });
-        });
-
-        function currentSelection() {
-            const checked = offersList.querySelector('input[name="mm_offer_pick"]:checked');
-            return checked ? checked.value : '';
-        }
-
-        function doApply(code) {
-            applyBtn.disabled = true;
-            showMsg('Applying...', '');
-
-            const body = (code === '') ? 'remove=1' : ('code=' + encodeURIComponent(code));
-
-            fetch(MAIN_URL + 'ajax/apply-coupon.php', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                credentials: 'same-origin',
-                body: body,
-            })
-            .then(r => r.json())
-            .then(res => {
-                applyBtn.disabled = false;
-                if (res.success) {
-                    showMsg(res.message || 'Done!', 'success');
-                    setTimeout(() => window.location.reload(), 500);
-                } else {
-                    showMsg(res.message || 'Failed.', 'error');
-                }
-            })
-            .catch(() => {
-                applyBtn.disabled = false;
-                showMsg('Network error.', 'error');
-            });
-        }
-
-        applyBtn.addEventListener('click', function () {
-            doApply(currentSelection());
-        });
-
-        if (manualApplyBtn) {
-            manualApplyBtn.addEventListener('click', function () {
-                const typed = (manualInput.value || '').trim().toUpperCase();
-                if (!typed) {
-                    showMsg('Enter a coupon code.', 'error');
-                    return;
-                }
-                doApply(typed);
-            });
-        }
-
-        if (manualInput) {
-            manualInput.addEventListener('keypress', function (e) {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    manualApplyBtn.click();
-                }
-            });
-        }
-    })();
-
-    /* =========================================================
-       ✅ PAY NOW — individual house keeps the delivery charge
-       ========================================================= */
+    /* ---------- PAY NOW ---------- */
     payNowBtn?.addEventListener("click", () => {
-        const mobile = mobileInput.value.trim();
-        const name = nameInput.value.trim();
+        if (window.MIXED_MENUS_LOCKED || window.OOS_LOCKED) {
+            showToast("Please fix your cart first.", "error");
+            return;
+        }
+
+        const mobile = mobileInput ? mobileInput.value.trim() : "";
+        const name = nameInput ? nameInput.value.trim() : "";
         const orderNote = (document.getElementById("coOrderNote")?.value || "").trim().slice(0, 500);
 
-        if (!/^[0-9]{10,15}$/.test(mobile)) { showToast("Enter a valid mobile number.", "error"); mobileInput.focus(); return; }
-        if (name.length < 3) { showToast("Please enter your name.", "error"); nameInput.focus(); return; }
+        if (!/^[0-9]{10,15}$/.test(mobile)) { showToast("Enter a valid mobile number.", "error"); mobileInput?.focus(); return; }
+        if (name.length < 3) { showToast("Please enter your name.", "error"); nameInput?.focus(); return; }
 
         const mode = getCheckedMode();
         currentMode = mode;
@@ -562,7 +495,6 @@
                 aptId = "";
                 aptCode = "";
                 divLabel = "";
-                /* ✅ Keep saved house delivery charge instead of zeroing it */
                 divCharge = Number(window.CUSTOMER_DIVISION_CHARGE || 0);
             } else {
                 if (!aptId) { showToast("Please choose an apartment.", "error"); aptSearch?.focus(); return; }
@@ -623,7 +555,7 @@
 
         if (payable <= 0) {
             payNowBtn.disabled = true;
-            payNowText.textContent = "Placing...";
+            if (payNowText) payNowText.textContent = "Placing...";
             orderPayload.razorpay_payment_id = "WALLET-" + Date.now();
             finalizeOrder(orderPayload);
             return;
@@ -654,7 +586,7 @@
 
     function finalizeOrder(payload) {
         payNowBtn.disabled = true;
-        payNowText.textContent = "Processing...";
+        if (payNowText) payNowText.textContent = "Processing...";
 
         const fd = new FormData();
         Object.keys(payload).forEach(k => fd.append(k, payload[k]));
@@ -669,7 +601,7 @@
                 if (!res || !res.success) {
                     showToast((res && res.message) || "Failed to place order.", "error");
                     payNowBtn.disabled = false;
-                    payNowText.textContent = "Pay Now";
+                    if (payNowText) payNowText.textContent = "Pay Now";
                     return;
                 }
                 showToast("Order placed successfully!");
@@ -678,7 +610,7 @@
             .catch(() => {
                 showToast("Unable to connect.", "error");
                 payNowBtn.disabled = false;
-                payNowText.textContent = "Pay Now";
+                if (payNowText) payNowText.textContent = "Pay Now";
             });
     }
 
