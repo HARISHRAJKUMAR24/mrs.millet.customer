@@ -779,13 +779,21 @@
         });
     }
 
-    /* ✅ Edit = unlock the map field so the user can edit/paste the link manually */
+    /* ✅ Edit = unlock field + open Google Maps in new tab */
     if (regAptLocEdit) {
         regAptLocEdit.addEventListener("click", function () {
             if (!regAptMap) return;
             regAptMap.readOnly = false;
+
+            const cur = (regAptMap.value || "").trim();
+            const url = /^https?:\/\//i.test(cur) ? cur : "https://www.google.com/maps";
+            window.open(url, "_blank", "noopener");
+
+            if (regAptLocHint) {
+                regAptLocHint.textContent =
+                    "Google Maps opened in a new tab. Find your place → Share → Copy link → come back and paste here.";
+            }
             regAptMap.focus();
-            if (regAptLocHint) regAptLocHint.textContent = "Editing — you can paste or type a Google Maps link now.";
         });
     }
     if (regAptLocUndo) {
@@ -817,13 +825,21 @@
         });
     }
 
-    /* ✅ Edit = unlock the house map field */
+    /* ✅ Edit = unlock field + open Google Maps in new tab */
     if (regHouseLocEdit) {
         regHouseLocEdit.addEventListener("click", function () {
             if (!regHouseMap) return;
             regHouseMap.readOnly = false;
+
+            const cur = (regHouseMap.value || "").trim();
+            const url = /^https?:\/\//i.test(cur) ? cur : "https://www.google.com/maps";
+            window.open(url, "_blank", "noopener");
+
+            if (regHouseLocHint) {
+                regHouseLocHint.textContent =
+                    "Google Maps opened in a new tab. Find your place → Share → Copy link → come back and paste here.";
+            }
             regHouseMap.focus();
-            if (regHouseLocHint) regHouseLocHint.textContent = "Editing — you can paste or type a Google Maps link now.";
         });
     }
     if (regHouseLocUndo) {
