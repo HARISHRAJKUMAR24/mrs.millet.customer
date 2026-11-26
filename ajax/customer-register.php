@@ -4,6 +4,13 @@ require_once __DIR__ . '/../config/function.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
+/* =========================================================
+   FULL SERVER FOLDER PATH OF THE ADMIN SITE (admin.mrsmillet.in)
+   Leave empty to detect automatically. If detection fails, set it:
+   e.g. '/home/USERNAME/domains/mrsmillet.in/public_html/admin'
+   ========================================================= */
+const ADMIN_FOLDER_PATH = '';
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     jsonResponse(false, 'Method not allowed.');
 }
@@ -27,7 +34,6 @@ $customDiv     = trim($_POST['custom_division']  ?? '');
 /* House / Full address inputs (used by BOTH modes now) */
 $houseAddr   = trim($_POST['house_address']    ?? '');
 $mapLink     = trim($_POST['map_link']         ?? '');
-$houseImgB64 = trim($_POST['house_image_data'] ?? '');
 $landmark    = trim($_POST['landmark']         ?? '');
 
 if ($name === '' || mb_strlen($name) < 3) {
@@ -41,27 +47,98 @@ if (strlen($password) < 3) {
 }
 
 /* =========================================================
-   IMAGE UPLOAD HELPER
+   IMAGE UPLOAD HELPERS
+   Saved inside the ADMIN site:
+   uploads/houses/<Y>/<m>/<d>/<owner>/house.<ext>
    ========================================================= */
-function saveBase64Image($base64String)
+function findAdminRoot(): ?string
 {
-    if ($base64String === '') return '';
-    if (preg_match('/^data:image\/(png|jpe?g|webp|gif);base64,/i', $base64String, $m)) {
-        $ext  = strtolower($m[1]) === 'jpeg' ? 'jpg' : strtolower($m[1]);
-        $data = base64_decode(preg_replace('#^data:image/\w+;base64,#i', '', $base64String));
+    $main   = dirname(__DIR__);
+    $parent = dirname($main);
+    $top    = dirname($parent);
 
-        if ($data !== false && strlen($data) <= 3 * 1024 * 1024) {
-            $folder = 'uploads/houses/' . date('Ymd') . '/' . bin2hex(random_bytes(5));
-            $absDir = rtrim(__DIR__ . '/../', '/\\') . '/' . $folder;
-            if (!is_dir($absDir)) @mkdir($absDir, 0775, true);
+    $candidates = ADMIN_FOLDER_PATH !== '' ? [ADMIN_FOLDER_PATH] : [
+        $main . '/admin',
+        $parent . '/admin',
+        $parent . '/admin.mrsmillet.in',
+        $parent . '/admin.mrsmillet.in/public_html',
+        $top . '/admin.mrsmillet.in',
+        $top . '/admin.mrsmillet.in/public_html',
+    ];
 
-            $fileName = 'house.' . $ext;
-            if (@file_put_contents($absDir . '/' . $fileName, $data) !== false) {
-                return $folder . '/' . $fileName;
-            }
+    /* The correct folder is the one holding the admin's save file */
+    foreach ($candidates as $dir) {
+        $dir = rtrim($dir, '/\\');
+        if (@is_file($dir . '/ajax/add-customer-save.php')) return $dir;
+    }
+    return null;
+}
+
+/* Reads and checks the photo. Returns null when no photo was sent. */
+function readHouseImage(): ?array
+{
+    $data = '';
+
+    if (isset($_FILES['house_image']) && $_FILES['house_image']['error'] !== UPLOAD_ERR_NO_FILE) {
+        $f = $_FILES['house_image'];
+        if ($f['error'] !== UPLOAD_ERR_OK) jsonResponse(false, 'Image upload failed (code ' . $f['error'] . ').');
+        if ($f['size'] > 3 * 1024 * 1024) jsonResponse(false, 'Image must be under 3 MB.');
+        $data = (string)file_get_contents($f['tmp_name']);
+    } else {
+        /* Old cached script may still send base64 */
+        $b64 = trim($_POST['house_image_data'] ?? '');
+        if ($b64 === '') return null;
+        $data = (string)base64_decode(preg_replace('#^data:image/[a-z]+;base64,#i', '', $b64));
+        if (strlen($data) > 3 * 1024 * 1024) jsonResponse(false, 'Image must be under 3 MB.');
+    }
+
+    $types = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp', 'image/gif' => 'gif'];
+    $mime  = (new finfo(FILEINFO_MIME_TYPE))->buffer($data);
+    if (!isset($types[$mime])) jsonResponse(false, 'Only JPG, PNG, WEBP or GIF allowed.');
+
+    $root = findAdminRoot();
+    if ($root === null) {
+        error_log('customer-register: admin folder not found. Set ADMIN_FOLDER_PATH.');
+        jsonResponse(false, 'Image storage is not set up. Please remove the photo or contact us.');
+    }
+
+    return ['data' => $data, 'ext' => $types[$mime], 'root' => $root];
+}
+
+/* Saves the photo, OVERWRITING the previous one. Returns '' on failure. */
+function saveHouseImage(?array $img, string $owner, string $oldRelPath = ''): string
+{
+    if ($img === null) return '';
+
+    $root   = $img['root'];
+    $relDir = 'uploads/houses/' . date('Y/m/d') . '/' . $owner;
+    $absDir = $root . '/' . $relDir;
+    if (!is_dir($absDir) && !@mkdir($absDir, 0775, true) && !is_dir($absDir)) return '';
+
+    $fileName = 'house.' . $img['ext'];
+    $absFile  = $absDir . '/' . $fileName;
+    $tmpFile  = $absDir . '/tmp_' . bin2hex(random_bytes(6));
+
+    if (@file_put_contents($tmpFile, $img['data']) === false) return '';
+    @chmod($tmpFile, 0644);
+    if (!@rename($tmpFile, $absFile)) {
+        @unlink($tmpFile);
+        return '';
+    }
+
+    foreach (glob($absDir . '/house.*') ?: [] as $other) {
+        if (basename($other) !== $fileName && is_file($other)) @unlink($other);
+    }
+
+    if ($oldRelPath !== '') {
+        $oldReal = realpath($root . '/' . ltrim(explode('?', $oldRelPath)[0], '/\\'));
+        $upReal  = realpath($root . '/uploads/houses');
+        if ($oldReal && $upReal && $oldReal !== realpath($absFile) && strpos($oldReal, $upReal) === 0) {
+            @unlink($oldReal);
         }
     }
-    return '';
+
+    return $relDir . '/' . $fileName;
 }
 
 /* =========================================================
@@ -119,7 +196,7 @@ function saveReferral(PDO $pdo, int $customerId, string $name, string $mobile, s
 if ($reqType === 'individual_house') {
     if ($houseAddr === '') jsonResponse(false, 'Please enter your full address.');
 
-    $savedImagePath = saveBase64Image($houseImgB64);
+    $houseImage = readHouseImage();
 
     try {
         $chk = $pdo->prepare("SELECT id FROM customer_address_requests WHERE customer_mobile = ? AND status = 0 ORDER BY id DESC LIMIT 1");
@@ -131,6 +208,11 @@ if ($reqType === 'individual_house') {
                 'already_requested' => true,
                 'request_id' => (int)$existing['id']
             ]);
+        }
+
+        $savedImagePath = saveHouseImage($houseImage, 'request_' . $mobile);
+        if ($houseImage !== null && $savedImagePath === '') {
+            jsonResponse(false, 'Could not save the image. Please try again.');
         }
 
         $passwordHash = password_hash($password, PASSWORD_DEFAULT);
@@ -205,7 +287,7 @@ if ($divisionLabel === '') {
     $divisionLabel = implode(' / ', $parts);
 }
 
-$savedImagePath = saveBase64Image($houseImgB64);
+$houseImage = readHouseImage();
 
 try {
 
@@ -315,7 +397,7 @@ try {
             'full_address'   => $houseAddr,        // ✅ NEW
             'landmark'       => $landmark,
             'map_link'       => $mapLink,
-            'house_image'    => $savedImagePath
+            'house_image'    => ''
         ];
         $addressJsonFinal = json_encode($addressJson, JSON_UNESCAPED_UNICODE);
 
@@ -323,11 +405,17 @@ try {
         $sessionToken = bin2hex(random_bytes(32));
 
         /* Upsert customer */
-        $chk = $pdo->prepare("SELECT id FROM customers WHERE mobile_number = ? LIMIT 1");
+        $chk = $pdo->prepare("SELECT id, address_json FROM customers WHERE mobile_number = ? LIMIT 1");
         $chk->execute([$mobile]);
         $existingCustomer = $chk->fetch(PDO::FETCH_ASSOC);
 
         if ($existingCustomer) {
+            /* Keep the old photo unless a new one overrides it */
+            $oldAddr  = json_decode($existingCustomer['address_json'] ?? '', true);
+            $oldImage = is_array($oldAddr) ? (string)($oldAddr['house_image'] ?? '') : '';
+            $addressJson['house_image'] = $oldImage;
+            $addressJsonFinal = json_encode($addressJson, JSON_UNESCAPED_UNICODE);
+
             $upd = $pdo->prepare(
                 "UPDATE customers
                  SET full_name = ?, password_hash = ?, session_token = ?,
@@ -351,6 +439,19 @@ try {
             $newId = (int)$pdo->lastInsertId();
         }
 
+        /* Save the photo now that we know the customer id */
+        $imageFailed = false;
+        if ($houseImage !== null) {
+            $newPath = saveHouseImage($houseImage, 'customer_' . $newId, (string)$addressJson['house_image']);
+            if ($newPath !== '') {
+                $addressJson['house_image'] = $newPath;
+                $pdo->prepare("UPDATE customers SET address_json = ? WHERE id = ?")
+                    ->execute([json_encode($addressJson, JSON_UNESCAPED_UNICODE), $newId]);
+            } else {
+                $imageFailed = true;
+            }
+        }
+
         /* Referral */
         $referralId = 0;
         if ($referrer !== '') {
@@ -362,7 +463,7 @@ try {
         $_SESSION['customer_mobile'] = $mobile;
         $_SESSION['customer_token']  = $sessionToken;
 
-        jsonResponse(true, 'Account created successfully!', [
+        jsonResponse(true, $imageFailed ? 'Account created, but the photo could not be saved.' : 'Account created successfully!', [
             'id'                 => $newId,
             'name'               => $name,
             'mobile'             => $mobile,
@@ -388,6 +489,11 @@ try {
             'already_requested' => true,
             'request_id' => (int)$existing['id']
         ]);
+    }
+
+    $savedImagePath = saveHouseImage($houseImage, 'request_' . $mobile);
+    if ($houseImage !== null && $savedImagePath === '') {
+        jsonResponse(false, 'Could not save the image. Please try again.');
     }
 
     $passwordHash = password_hash($password, PASSWORD_DEFAULT);

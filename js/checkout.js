@@ -1,11 +1,11 @@
 /* =========================================================
    MRS MILL@ — CHECKOUT
-   File: ./js/checkout.js   v2026-11-25a
+   File: ./js/checkout.js   v2026-11-26b
    Fixes:
    - null-safe updateTotals (no more "textContent of null")
    - Subtotal row shows raw subtotal, discount shown separately
-   - window.setCheckoutSubtotal() so coupon apply/remove keeps
-     totals + Razorpay amount in sync
+   - window.setCheckoutSubtotal() now also syncs CART_RAW_SUBTOTAL
+     so coupon apply/remove keeps totals + Razorpay amount in sync
    ========================================================= */
 
 (function () {
@@ -448,9 +448,12 @@
         }
     }
 
-    /* Called by the coupon script after apply/remove so everything stays in sync */
+    /* Called by the coupon script after apply/remove so everything stays in sync.
+       NOTE: also syncs window.CART_RAW_SUBTOTAL so updateTotals() doesn't reset
+       the Subtotal row back to the pre-discount value. */
     window.setCheckoutSubtotal = function (newSubtotal) {
         subtotal = Math.max(0, Math.round(Number(newSubtotal) || 0));
+        window.CART_RAW_SUBTOTAL = subtotal;
         updateTotals();
     };
 

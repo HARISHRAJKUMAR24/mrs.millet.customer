@@ -202,6 +202,8 @@
         regAptMapLink: "",
         regAptImgData: "",
         regAptImgBlocked: false,
+        regAptImgFile: null,
+        regHouseImgFile: null,
         currentVariants: [],
         selectedCharge: null
     };
@@ -209,8 +211,8 @@
     /* =========================================================
        IMAGE SIZE LIMIT — enforced at upload time
        ========================================================= */
-    const IMG_MAX_BYTES = 3 * 1024 * 1024; // 3 MB
-    const IMG_MAX_LABEL = "3 MB";
+    const IMG_MAX_BYTES = 15 * 1024 * 1024; // 15 MB (photo is shrunk before upload)
+    const IMG_MAX_LABEL = "15 MB";
 
     function escapeHtml(s) {
         return String(s == null ? "" : s)
@@ -231,10 +233,31 @@
                     reason: "Image is " + mb + " MB — max allowed is " + IMG_MAX_LABEL + "."
                 });
             }
-            const reader = new FileReader();
-            reader.onload = function (evt) { resolve({ ok: true, dataUrl: evt.target.result }); };
-            reader.onerror = function () { resolve({ ok: false, reason: "Could not read the image file." }); };
-            reader.readAsDataURL(file);
+            /* Shrink the photo so the server never rejects it as too large */
+            const url = URL.createObjectURL(file);
+            const img = new Image();
+            const fail = function () {
+                URL.revokeObjectURL(url);
+                resolve({ ok: false, reason: "Could not read the image. Please use JPG or PNG." });
+            };
+            img.onload = function () {
+                const scale = Math.min(1, 1280 / Math.max(img.width, img.height));
+                const canvas = document.createElement("canvas");
+                canvas.width = Math.max(1, Math.round(img.width * scale));
+                canvas.height = Math.max(1, Math.round(img.height * scale));
+                const ctx = canvas.getContext("2d");
+                ctx.fillStyle = "#fff";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+                canvas.toBlob(function (blob) {
+                    if (!blob) return fail();
+                    URL.revokeObjectURL(url);
+                    resolve({ ok: true, dataUrl: dataUrl, blob: blob });
+                }, "image/jpeg", 0.8);
+            };
+            img.onerror = fail;
+            img.src = url;
         });
     }
 
@@ -264,7 +287,7 @@
 
     function markImageBlocked(which, reason) {
         if (which === "apt") {
-            state.regAptImgData = "";
+            state.regAptImgData = ""; state.regAptImgFile = null;
             state.regAptImgBlocked = true;
             if (regAptImgPrev) {
                 regAptImgPrev.classList.add("img-drop-empty");
@@ -276,7 +299,7 @@
             }
             try { regAptImg.value = ""; } catch (e) { }
         } else {
-            state.regHouseImgData = "";
+            state.regHouseImgData = ""; state.regHouseImgFile = null;
             state.regHouseImgBlocked = true;
             if (regHouseImgPrev) {
                 regHouseImgPrev.classList.add("img-drop-empty");
@@ -827,9 +850,11 @@
         regAptImg.addEventListener("change", function () {
             const file = this.files && this.files[0];
             if (!file) return;
+            this.value = ""; /* allows choosing the same photo again */
             readImageWithLimit(file).then(function (result) {
                 if (!result.ok) { markImageBlocked("apt", result.reason); return; }
-                applyImagePreview("apt", result.dataUrl, file.size);
+                state.regAptImgFile = result.blob;
+                applyImagePreview("apt", result.dataUrl, result.blob.size);
             });
         });
     }
@@ -839,9 +864,11 @@
         regHouseImg.addEventListener("change", function () {
             const file = this.files && this.files[0];
             if (!file) return;
+            this.value = ""; /* allows choosing the same photo again */
             readImageWithLimit(file).then(function (result) {
                 if (!result.ok) { markImageBlocked("house", result.reason); return; }
-                applyImagePreview("house", result.dataUrl, file.size);
+                state.regHouseImgFile = result.blob;
+                applyImagePreview("house", result.dataUrl, result.blob.size);
             });
         });
     }
@@ -882,7 +909,7 @@
             regAptImgPrev.classList.add("img-drop-empty");
             regAptImgPrev.innerHTML = '<span>Tap to upload a photo</span>';
         }
-        state.regAptImgData = "";
+        state.regAptImgData = ""; state.regAptImgFile = null;
         state.regAptImgBlocked = false;
 
         if (regHouseAddress) regHouseAddress.value = "";
@@ -896,7 +923,7 @@
             regHouseImgPrev.classList.add("img-drop-empty");
             regHouseImgPrev.innerHTML = '<span>Tap to upload a photo</span>';
         }
-        state.regHouseImgData = "";
+        state.regHouseImgData = ""; state.regHouseImgFile = null;
         state.regHouseImgBlocked = false;
 
         refreshRegisterButtonState();
@@ -1233,7 +1260,7 @@
                 fd.append("house_address", houseAddr);
                 fd.append("landmark", houseLandmarkVal);
                 if (state.regHouseMapLink) fd.append("map_link", state.regHouseMapLink);
-                if (state.regHouseImgData) fd.append("house_image_data", state.regHouseImgData);
+                if (state.regHouseImgFile) fd.append("house_image", state.regHouseImgFile, "house.jpg");
             } else {
                 const aptId = regAptId ? (regAptId.value || "").trim() : "";
                 const aptText = regAptSearch ? (regAptSearch.value || "").trim() : "";
@@ -1263,7 +1290,7 @@
                 fd.append("house_address", aptFullAddress);
                 fd.append("landmark", landmark);
                 if (state.regAptMapLink) fd.append("map_link", state.regAptMapLink);
-                if (state.regAptImgData) fd.append("house_image_data", state.regAptImgData);
+                if (state.regAptImgFile) fd.append("house_image", state.regAptImgFile, "house.jpg");
 
                 if (!aptId || aptId === "0") {
                     fd.append("custom_apartment", aptText);
@@ -1278,7 +1305,12 @@
             fetch(MAIN_URL + "ajax/customer-register.php", {
                 method: "POST", body: fd, credentials: "same-origin"
             })
-                .then(r => r.json().catch(() => null))
+                .then(r => r.json().catch(() => ({
+                    success: false,
+                    message: r.status === 413
+                        ? "Image is too large for the server."
+                        : "Unexpected server response (HTTP " + r.status + ")."
+                })))
                 .then(res => {
                     if (regBtn) regBtn.disabled = false;
                     if (regBtnText) regBtnText.textContent = "Create Account";

@@ -1902,7 +1902,7 @@ $checkoutBlocked = ($hasMixedMenus || $hasAnyOOS);
                     <?php if ($autoTimeApplied || ($loyaltyAmount > 0)): ?>
                         <div class="mm-auto-chips">
                             <?php if ($autoTimeApplied): ?>
-                                
+
                             <?php endif; ?>
                             <?php if ($loyaltyAmount > 0): ?>
                                 <span class="mm-auto-chip loyalty">
@@ -2394,7 +2394,13 @@ $checkoutBlocked = ($hasMixedMenus || $hasAnyOOS);
 
                         var labelHtml = 'Coupon ' + (d.code || code) + ' — ' + (d.label || '');
                         CURRENT_COUPON = discount;
+
+                        // 1) update coupon UI totals (discount row, tax, wallet, grand total)
                         recalcTotals(discount, labelHtml);
+
+                        // 2) CRITICAL: push the new (discounted) subtotal into checkout.js
+                        //    so Pay Now / Razorpay uses the coupon-reduced amount
+                        window.setCheckoutSubtotal(RAW_SUBTOTAL - (TIME_LOYALTY + discount));
                     })
                     .catch(function() {
                         setBusy(false);
@@ -2426,6 +2432,9 @@ $checkoutBlocked = ($hasMixedMenus || $hasAnyOOS);
                         switchToInput();
                         CURRENT_COUPON = 0;
                         recalcTotals(0, '');
+
+                        // CRITICAL: restore subtotal in checkout.js
+                        window.setCheckoutSubtotal(RAW_SUBTOTAL - TIME_LOYALTY);
                     })
                     .catch(function() {
                         setBusy(false);
@@ -2435,7 +2444,7 @@ $checkoutBlocked = ($hasMixedMenus || $hasAnyOOS);
 
             // =========================================================
             // FORCE INITIAL STATE FROM PHP TO PREVENT REFRESH BUGS
-            // This guarantees that if a coupon is applied, the input 
+            // This guarantees that if a coupon is applied, the input
             // stays hidden and ONLY the "Remove" button is shown.
             // =========================================================
             var phpIsApplied = "<?= $isCouponApplied ? 'true' : 'false' ?>";
@@ -2474,6 +2483,14 @@ $checkoutBlocked = ($hasMixedMenus || $hasAnyOOS);
                     }
                 });
             }
+
+            // =========================================================
+            // CRITICAL: Ensure checkout.js starts with the coupon-aware
+            // subtotal so the very first "Payable Now" and Razorpay
+            // amount already reflect any coupon stored in session.
+            // =========================================================
+            window.setCheckoutSubtotal(RAW_SUBTOTAL - (TIME_LOYALTY + CURRENT_COUPON));
+
         })();
     </script>
 
